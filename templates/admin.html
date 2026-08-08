@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Admin – Ring of Trust{% endblock %}
+{% block content %}
+<div class="admin-page">
+  <h2 class="form-page__title">Admin Panel</h2>
+
+  {% if flag_count > 0 %}
+  <div class="info-box info-box--warn" style="margin-bottom:1.5rem">
+    🚩 <strong>{{ flag_count }} pending security flag{{ 's' if flag_count != 1 }}</strong> awaiting review.
+    <a href="{{ url_for('admin_flags') }}">Review now →</a>
+  </div>
+  {% endif %}
+
+  <h3 class="section-title">Pending Approvals ({{ pending|length }})</h3>
+  {% if pending %}
+  <table class="table">
+    <thead><tr><th>Username</th><th>Email</th><th>Registered</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for u in pending %}
+      <tr>
+        <td>{{ u.username }}</td>
+        <td>{{ u.email }}</td>
+        <td>{{ u.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td class="table__actions">
+          <a href="{{ url_for('approve_user', user_id=u.id) }}" class="btn btn--sm btn--primary">Approve</a>
+          <a href="{{ url_for('reject_user',  user_id=u.id) }}" class="btn btn--sm btn--danger"
+             onclick="return confirm('Remove this registration?')">Reject</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="dir-page__empty">No pending registrations.</p>
+  {% endif %}
+
+  <h3 class="section-title" style="margin-top:2rem">All Members</h3>
+  <table class="table">
+    <thead><tr><th>Username</th><th>Email</th><th>Status</th><th>Keys</th><th>Admin</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for u in all_users %}
+      <tr>
+        <td>{{ u.username }}</td>
+        <td>{{ u.email }}</td>
+        <td><span class="status-tag status-tag--{{ u.key_status }}">{{ u.key_status.upper() }}</span>
+            {% if u.debt_disputed %}<span class="status-tag status-tag--disputed">DISPUTED</span>{% endif %}</td>
+        <td>{{ '✓' if u.has_keys else '✗' }}</td>
+        <td>{{ '✓' if u.is_admin else '—' }}</td>
+        <td class="table__actions">
+          <a href="{{ url_for('toggle_admin', user_id=u.id) }}" class="btn btn--xs btn--ghost">Toggle Admin</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

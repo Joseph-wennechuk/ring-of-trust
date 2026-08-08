@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Ring of Trust{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@300;400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  {% if current_user %}
+  <nav class="nav">
+    <a href="{{ url_for('dashboard') }}" class="nav-brand">ROT</a>
+    <div class="nav-links">
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('key_directory') }}">Key Directory</a>
+      <a href="{{ url_for('add_debt') }}">Record Debt</a>
+      {% if current_user.is_admin %}
+        <a href="{{ url_for('admin_panel') }}" class="admin-link">Admin</a>
+        <a href="{{ url_for('admin_flags') }}" class="flag-link">Flags</a>
+      {% endif %}
+      <a href="{{ url_for('logout') }}" class="logout">Logout</a>
+    </div>
+  </nav>
+  {% endif %}
+  <main class="main">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-wrap">
+          {% for category, message in messages %}
+            <div class="flash flash--{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="footer">RING OF TRUST // PGP WEB-OF-TRUST NETWORK</footer>
+</body>
+</html>

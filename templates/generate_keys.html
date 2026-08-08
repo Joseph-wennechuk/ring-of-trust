@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Generate Keys – Ring of Trust{% endblock %}
+{% block content %}
+<div class="form-page form-page--wide">
+  <h2 class="form-page__title">Generate Your PGP Keypair</h2>
+  <div class="info-box">
+    <p>You will receive an <strong>Ed25519 / Curve25519</strong> keypair — modern elliptic-curve cryptography.</p>
+    <p>Your <strong>private key</strong> and a <strong>24-word recovery mnemonic</strong> will be available for download immediately after generation. They are never stored by this server.</p>
+    <p>Choose a strong passphrase of at least 12 characters. You will need it every time you use your private key.</p>
+  </div>
+  <form method="POST" class="form">
+    <label class="form__label">Key Passphrase (min 12 chars)
+      <input class="form__input" type="password" name="passphrase" required minlength="12"
+             placeholder="Something long and memorable">
+    </label>
+    <label class="form__label">Confirm Passphrase
+      <input class="form__input" type="password" id="confirm" required minlength="12">
+    </label>
+    <button class="btn btn--primary" type="submit" id="gen-btn">Generate Keypair</button>
+  </form>
+</div>
+<script>
+  document.querySelector("form").addEventListener("submit", function(e) {
+    const p1 = document.querySelector("[name=passphrase]").value;
+    const p2 = document.getElementById("confirm").value;
+    if (p1 !== p2) { e.preventDefault(); alert("Passphrases do not match."); return; }
+    document.getElementById("gen-btn").textContent = "Generating… (this may take a moment)";
+    document.getElementById("gen-btn").disabled = true;
+  });
+</script>
+{% endblock %}

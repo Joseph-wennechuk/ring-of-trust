@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Security Flags – Ring of Trust{% endblock %}
+{% block content %}
+<div class="admin-page">
+  <h2 class="form-page__title">Security Flags</h2>
+  <div class="info-box" style="margin-bottom:1.5rem">
+    Security flags are <strong>informational only</strong> and do not affect key status.
+    Key inactivity is controlled by debt effort status, not by flags.
+    Admins can manually revoke a key below.
+  </div>
+
+  <!-- Pending flags -->
+  <h3 class="section-title">Pending Review ({{ pending|length }})</h3>
+  {% if pending %}
+    {% for f in pending %}
+    <div class="flag-admin-card">
+      <div class="flag-admin-card__header">
+        <span class="flag-admin-card__target">{{ f.target.username }}</span>
+        <span class="flag-admin-card__reason">{{ f.reason }}</span>
+        <span class="flag-admin-card__meta">flagged by {{ f.flagger.username }} · {{ f.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+      </div>
+      {% if f.notes %}<p class="flag-admin-card__notes">{{ f.notes }}</p>{% endif %}
+      <div class="flag-admin-card__actions">
+        <a href="{{ url_for('uphold_flag', flag_id=f.id) }}" class="btn btn--sm btn--warn">Uphold</a>
+        <a href="{{ url_for('dismiss_flag', flag_id=f.id) }}" class="btn btn--sm btn--ghost">Dismiss</a>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="dir-page__empty">No pending flags.</p>
+  {% endif %}
+
+  <!-- Inactive keys -->
+  {% if inactive_users %}
+  <h3 class="section-title" style="margin-top:2rem">Inactive Keys (debt non-repayment)</h3>
+  <table class="table">
+    <thead><tr><th>Member</th><th>Disputed</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for u in inactive_users %}
+    <tr>
+      <td>{{ u.username }}{% if u.debt_disputed %} <span class="status-tag status-tag--disputed">DISPUTED</span>{% endif %}</td>
+      <td>{{ u.dispute_note or '—' }}</td>
+      <td class="table__actions">
+        <form method="POST" action="{{ url_for('revoke_key', user_id=u.id) }}" class="inline-form">
+          <input type="text" name="note" placeholder="Revocation reason…" class="form__input form__input--sm">
+          <button class="btn btn--xs btn--danger" onclick="return confirm('Revoke this key?')">Revoke Key</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <!-- Revoked keys -->
+  {% if revoked_users %}
+  <h3 class="section-title" style="margin-top:2rem">Revoked Keys</h3>
+  <table class="table">
+    <thead><tr><th>Member</th><th>Revoked</th><th>Note</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for u in revoked_users %}
+    <tr>
+      <td>{{ u.username }}</td>
+      <td>{{ u.revoked_at.strftime('%Y-%m-%d') if u.revoked_at else '—' }}</td>
+      <td>{{ u.revoke_note or '—' }}</td>
+      <td class="table__actions">
+        <form method="POST" action="{{ url_for('reinstate_key', user_id=u.id) }}">
+          <button class="btn btn--xs btn--ghost" onclick="return confirm('Reinstate this key?')">Reinstate</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <!-- Reviewed flags (recent 50) -->
+  {% if reviewed %}
+  <h3 class="section-title" style="margin-top:2rem">Recently Reviewed Flags</h3>
+  <table class="table">
+    <thead><tr><th>Target</th><th>Reason</th><th>By</th><th>Decision</th><th>Date</th></tr></thead>
+    <tbody>
+    {% for f in reviewed %}
+    <tr>
+      <td>{{ f.target.username }}</td>
+      <td>{{ f.reason }}</td>
+      <td>{{ f.flagger.username }}</td>
+      <td><span class="status-tag status-tag--{% if f.upheld %}upheld{% else %}dismissed{% endif %}">
+        {{ 'UPHELD' if f.upheld else 'DISMISSED' }}</span></td>
+      <td>{{ f.reviewed_at.strftime('%Y-%m-%d') if f.reviewed_at else '—' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

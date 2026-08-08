@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – Ring of Trust{% endblock %}
+{% block content %}
+<div class="dashboard">
+  <h2 class="form-page__title">Welcome, {{ current_user.username }}</h2>
+
+  {% if my_bad_debts > 0 %}
+  <div class="info-box info-box--danger" style="margin-bottom:1.5rem">
+    ⛔ <strong>Your key is inactive.</strong>
+    {{ my_bad_debts }} of your debt{{ 's' if my_bad_debts != 1 }} {{ 'have' if my_bad_debts != 1 else 'has' }} been marked as no efforts by the creditor.
+    Your key will reactivate once the creditor confirms you are making efforts, or once the debt is settled.
+    You can dispute this in the Key Directory.
+  </div>
+  {% endif %}
+
+  <div class="dash-grid">
+    <a href="{{ url_for('key_directory') }}" class="dash-card">
+      <span class="dash-card__icon">🔑</span>
+      <span class="dash-card__label">Key Directory</span>
+      <span class="dash-card__desc">Browse, sign, annotate, and flag public keys</span>
+    </a>
+    <a href="{{ url_for('add_debt') }}" class="dash-card">
+      <span class="dash-card__icon">📒</span>
+      <span class="dash-card__label">Record Debt</span>
+      <span class="dash-card__desc">Log outstanding debts between members</span>
+    </a>
+    {% if current_user.is_admin %}
+    <a href="{{ url_for('admin_panel') }}" class="dash-card dash-card--admin">
+      <span class="dash-card__icon">⚙</span>
+      <span class="dash-card__label">Admin Panel</span>
+      <span class="dash-card__desc">Approve registrations
+        {% if pending_count > 0 %}<span class="badge">{{ pending_count }}</span>{% endif %}
+      </span>
+    </a>
+    <a href="{{ url_for('admin_flags') }}" class="dash-card dash-card--warn">
+      <span class="dash-card__icon">🚩</span>
+      <span class="dash-card__label">Security Flags</span>
+      <span class="dash-card__desc">Review opsec reports
+        {% if flag_review_count > 0 %}<span class="badge badge--warn">{{ flag_review_count }}</span>{% endif %}
+      </span>
+    </a>
+    {% endif %}
+  </div>
+
+  <div class="info-box" style="margin-top:2rem">
+    <p><strong>Fingerprint:</strong> <code>{{ current_user.fingerprint }}</code></p>
+    <p><strong>Key status:</strong> <span class="status-tag status-tag--{{ current_user.key_status }}">{{ current_user.key_status.upper() }}</span>
+      {% if current_user.debt_disputed %}<span class="status-tag status-tag--disputed">DISPUTED</span>{% endif %}
+    </p>
+  </div>
+</div>
+{% endblock %}

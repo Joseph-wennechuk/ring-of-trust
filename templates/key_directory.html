@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}Key Directory – Ring of Trust{% endblock %}
+{% block content %}
+<div class="dir-page">
+  <h2 class="form-page__title">Key Directory</h2>
+  <p class="dir-page__intro">
+    All approved members with registered keys.
+    A key becomes <strong>inactive</strong> when a creditor or admin marks the debtor as not making efforts to repay.
+    The debtor can <strong>dispute</strong> this publicly.
+    Security flags are informational only and do not affect key status.
+  </p>
+
+  {% for entry in data %}
+  {% set u = entry.user %}
+  <div class="key-card key-card--{{ u.key_status }}{% if entry.is_own %} key-card--mine{% endif %}">
+
+    <!-- Header -->
+    <div class="key-card__header">
+      <div>
+        <span class="key-card__name">{{ u.username }}</span>
+        <span class="status-tag status-tag--{{ u.key_status }}">{{ u.key_status.upper() }}</span>
+        {% if u.debt_disputed %}
+          <span class="status-tag status-tag--disputed">DISPUTED</span>
+        {% endif %}
+        {% if entry.open_flag_count > 0 %}
+          <span class="status-tag status-tag--flagged">🚩 OPSEC FLAG</span>
+        {% endif %}
+        <span class="key-card__fp">{{ u.fingerprint }}</span>
+      </div>
+      <span class="sig-count">🔏 {{ entry.sigs|length }} sig{{ 's' if entry.sigs|length != 1 }}</span>
+    </div>
+
+    <!-- Revocation notice -->
+    {% if u.key_status == 'revoked' %}
+    <div class="status-notice status-notice--revoked">
+      ⛔ KEY REVOKED{% if u.revoked_at %} — {{ u.revoked_at.strftime('%Y-%m-%d') }}{% endif %}
+      {% if u.revoke_note %}<br><em>{{ u.revoke_note }}</em>{% endif %}
+    </div>
+    {% elif u.key_status == 'inactive' %}
+    <div class="status-notice status-notice--inactive">
+      🔴 KEY INACTIVE — creditor has marked this member as not making efforts to repay outstanding debt.
+      {% if u.debt_disputed %}
+        <br>⚡ <strong>Debtor has disputed this:</strong> {{ u.dispute_note }}
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Opsec flags (collapsible, informational) -->
+    {% if entry.flags %}
+    <details class="flag-details">
+      <summary class="flag-details__summary">Security flags ({{ entry.flags|length }})</summary>
+      <div class="flag-list">
+        {% for f in entry.flags %}
+        <div class="flag-item flag-item--{% if f.upheld is none %}pending{% elif f.upheld %}upheld{% else %}dismissed{% endif %}">
+          <div class="flag-item__header">
+            <span class="flag-item__reason">{{ f.reason }}</span>
+            <span class="flag-item__status">
+              {% if f.upheld is none %}PENDING{% elif f.upheld %}UPHELD{% else %}DISMISSED{% endif %}
+            </span>
+            <span class="flag-item__meta">{{ f.flagger.username }} · {{ f.created_at.strftime('%Y-%m-%d') }}</span>
+          </div>
+          {% if f.notes %}<p class="flag-item__notes">{{ f.notes }}</p>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+
+    <!-- Debts -->
+    {% if entry.debts %}
+    <div class="key-card__debts">
+      <strong>Outstanding debts:</strong>
+      {% for d in entry.debts %}
+      <div class="debt-row debt-row--{% if d.efforts_ok %}ok{% else %}bad{% endif %}">
+        <div class="debt-row__info">
+          <span class="debt-row__desc">{{ d.description }}</span>
+          <span class="debt-row__amount">{{ "%.2f"|format(d.amount) }} {{ d.currency }}</span>
+          <span class="debt-row__to">→ {{ d.creditor.username }}</span>
+          {% if not d.efforts_ok %}
+            <span class="debt-row__tag">NO EFFORTS</span>
+            {% if d.efforts_note %}<span class="debt-row__efnote">{{ d.efforts_note }}</span>{% endif %}
+          {% endif %}
+        </div>
+        <!-- Reduce (debtor, creditor, or admin) -->
+        {% if entry.is_own or d.creditor_id == me.id or me.is_admin %}
+        <form method="POST" action="{{ url_for('reduce_debt', debt_id=d.id) }}" class="inline-form">
+          <input type="number" name="amount" min="0.01" max="{{ d.amount }}" step="0.01"
+                 placeholder="reduce by…" class="form__input form__input--sm">
+          <button class="btn btn--xs">Reduce</button>
+        </form>
+        {% endif %}
+        <!-- Set efforts (creditor or admin only) -->
+        {% if d.creditor_id == me.id or me.is_admin %}
+        <details class="efforts-form">
+          <summary class="btn btn--xs btn--ghost">Set Efforts</summary>
+          <form method="POST" action="{{ url_for('set_efforts', debt_id=d.id) }}" class="efforts-form__body">
+            <label class="form__label">Status
+              <select name="efforts_ok" class="form__input">
+                <option value="1" {% if d.efforts_ok %}selected{% endif %}>Making efforts ✓</option>
+                <option value="0" {% if not d.efforts_ok %}selected{% endif %}>NOT making efforts ✗</option>
+              </select>
+            </label>
+            <label class="form__label">Note (optional)
+              <input type="text" name="efforts_note" class="form__input"
+                     placeholder="Brief reason…" maxlength="500"
+                     value="{{ d.efforts_note or '' }}">
+            </label>
+            <button class="btn btn--xs btn--primary" type="submit">Update</button>
+          </form>
+        </details>
+        {% endif %}
+        <!-- Dispute (debtor only, when efforts_ok=False) -->
+        {% if entry.is_own and not d.efforts_ok %}
+        <details class="efforts-form">
+          <summary class="btn btn--xs btn--warn">Dispute</summary>
+          <form method="POST" action="{{ url_for('dispute_debt', debt_id=d.id) }}" class="efforts-form__body">
+            <label class="form__label">Your statement
+              <textarea name="dispute_note" class="form__input form__input--ta" rows="2"
+                        placeholder="Explain why this marking is incorrect…" maxlength="1000"></textarea>
+            </label>
+            <button class="btn btn--xs btn--warn" type="submit">Submit Dispute</button>
+          </form>
+        </details>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Signers -->
+    {% if entry.sigs %}
+    <div class="key-card__sigs">
+      <strong>Signed by:</strong>
+      {% for s in entry.sigs %}
+        <span class="sig-pill" title="{{ s.note or 'No note' }}">{{ s.signer.username }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Annotations -->
+    {% if entry.annots %}
+    <div class="key-card__annots">
+      {% for a in entry.annots %}
+      <div class="annot">
+        <span class="annot__author">{{ a.author.username }}</span>
+        <span class="annot__date">{{ a.created_at.strftime('%Y-%m-%d') }}</span>
+        <p class="annot__body">{{ a.body }}</p>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Actions (not own key) -->
+    {% if not entry.is_own %}
+    <div class="key-card__actions">
+      {% if u.key_status != 'revoked' %}
+        {% if entry.can_sign %}
+        <form method="POST" action="{{ url_for('sign_key', target_id=u.id) }}" class="inline-form">
+          <input type="text" name="note" placeholder="Optional note (e.g. 'met in person 2024')"
+                 maxlength="300" class="form__input form__input--sm">
+          <button class="btn btn--sm btn--primary">Sign Key</button>
+        </form>
+        {% else %}
+          <span class="tag tag--signed">✓ Key signed</span>
+        {% endif %}
+      {% endif %}
+
+      <form method="POST" action="{{ url_for('annotate', target_id=u.id) }}" class="inline-form inline-form--col">
+        <textarea name="body" placeholder="Add a public annotation…" maxlength="1000"
+                  class="form__input form__input--ta" rows="2"></textarea>
+        <button class="btn btn--sm btn--ghost">Add Annotation</button>
+      </form>
+
+      {% if entry.can_flag %}
+      <details class="flag-form">
+        <summary class="btn btn--sm btn--flag">🚩 Security Flag</summary>
+        <form method="POST" action="{{ url_for('flag_key', target_id=u.id) }}" class="flag-form__body">
+          <p class="flag-form__intro">
+            Submit if you have operational security concerns about this member's key or communications.
+            This is informational only — it does not affect their key status.
+            All flags are visible to all members.
+          </p>
+          <label class="form__label">Reason
+            <select name="reason" class="form__input" required>
+              <option value="">— select reason —</option>
+              {% for r in flag_reasons %}
+              <option value="{{ r }}">{{ r }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="form__label">Supporting notes (optional)
+            <textarea name="notes" class="form__input form__input--ta" rows="3"
+                      placeholder="Describe what you observed. Be specific." maxlength="2000"></textarea>
+          </label>
+          <button class="btn btn--sm btn--flag" type="submit">Submit Flag</button>
+        </form>
+      </details>
+      {% elif entry.already_flagged %}
+        <span class="tag tag--flagged">🚩 Open flag submitted</span>
+      {% endif %}
+    </div>
+    {% endif %}
+
+  </div>
+  {% else %}
+  <p class="dir-page__empty">No members with keys yet.</p>
+  {% endfor %}
+</div>
+{% endblock %}

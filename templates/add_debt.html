@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Record Debt – Ring of Trust{% endblock %}
+{% block content %}
+<div class="form-page form-page--wide">
+  <h2 class="form-page__title">Record a Debt</h2>
+  <div class="info-box">
+    <p>Debts are displayed publicly next to the debtor's public key. The creditor or an admin can mark the debtor as "not making efforts", which deactivates their key until efforts resume or the debt is settled. The debtor may dispute this publicly.</p>
+  </div>
+  <form method="POST" class="form">
+    <label class="form__label">Debtor (who owes)
+      <select class="form__input" name="debtor_id" required>
+        <option value="">— select member —</option>
+        {% for p in peers %}
+          <option value="{{ p.id }}">{{ p.username }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="form__label">Creditor (who is owed)
+      <select class="form__input" name="creditor_id" required>
+        <option value="">— select member —</option>
+        {% for p in peers %}
+          <option value="{{ p.id }}">{{ p.username }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="form__label">Description
+      <input class="form__input" type="text" name="description" required maxlength="300"
+             placeholder="What is the debt for?">
+    </label>
+    <div class="form__row">
+      <label class="form__label">Amount
+        <input class="form__input" type="number" name="amount" required min="0.01" step="0.01">
+      </label>
+      <label class="form__label">Currency
+        <input class="form__input" type="text" name="currency" value="USD" maxlength="10">
+      </label>
+    </div>
+    <div style="display:flex;gap:1rem">
+      <button class="btn btn--primary" type="submit">Record Debt</button>
+      <a href="{{ url_for('key_directory') }}" class="btn btn--ghost">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

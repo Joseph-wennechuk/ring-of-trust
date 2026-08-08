@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Login – Ring of Trust{% endblock %}
+{% block content %}
+<div class="form-page">
+  <h2 class="form-page__title">Login</h2>
+  <form method="POST" class="form">
+    <label class="form__label">Username
+      <input class="form__input" type="text" name="username" required autofocus>
+    </label>
+    <label class="form__label">Password
+      <input class="form__input" type="password" name="password" required>
+    </label>
+    <button class="btn btn--primary" type="submit">Login</button>
+  </form>
+  <p class="form-page__foot">No account? <a href="{{ url_for('register') }}">Register</a></p>
+</div>
+{% endblock %}
