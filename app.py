@@ -160,10 +160,18 @@ class Debt(db.Model):
     amount      = db.Column(db.Float, nullable=False)
     currency    = db.Column(db.String(10), default="USD")
     active      = db.Column(db.Boolean, default=True)
+    # Recorded by the creditor; has no effect until the debtor (or an admin) confirms it
+    confirmed    = db.Column(db.Boolean, default=False)
+    confirmed_at = db.Column(db.DateTime, nullable=True)
     # Creditor/admin can mark debtor as not making efforts on this debt
     efforts_ok  = db.Column(db.Boolean, default=True)
     efforts_note = db.Column(db.Text, nullable=True)
     efforts_updated_at = db.Column(db.DateTime, nullable=True)
+    # Debtor's dispute of a no-efforts marking: None | 'open' (awaiting an admin)
+    # | 'upheld' (admin kept the marking). An admin clearing it resets to None.
+    dispute_status = db.Column(db.String(16), nullable=True)
+    dispute_note   = db.Column(db.Text, nullable=True)
+    disputed_at    = db.Column(db.DateTime, nullable=True)
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at  = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     debtor      = db.relationship("User", foreign_keys=[debtor_id],  back_populates="debts")
@@ -358,22 +366,25 @@ def generate_mnemonic() -> str:
 
 def recheck_debt_status(debtor: User):
     """
-    Key goes inactive if ANY active debt on this user has efforts_ok=False.
-    Key returns to active only when all active debts have efforts_ok=True.
-    Revoked status is untouched by this function.
+    Key goes inactive if ANY confirmed, active debt on this user has efforts_ok=False.
+    Key returns to active only when all of them have efforts_ok=True.
+    Revoked status is untouched by this function, but the dispute summary on
+    the user (shown next to their key) is always refreshed.
     """
-    if debtor.key_status == "revoked":
-        return
-    bad_debts = Debt.query.filter_by(
-        debtor_id=debtor.id, active=True, efforts_ok=False
-    ).count()
-    if bad_debts > 0:
-        debtor.key_status = "inactive"
-    else:
-        if debtor.key_status == "inactive":
+    open_dispute = (Debt.query
+                    .filter_by(debtor_id=debtor.id, active=True, confirmed=True,
+                               dispute_status="open")
+                    .order_by(Debt.disputed_at.desc()).first())
+    debtor.debt_disputed = open_dispute is not None
+    debtor.dispute_note  = open_dispute.dispute_note if open_dispute else None
+    if debtor.key_status != "revoked":
+        bad_debts = Debt.query.filter_by(
+            debtor_id=debtor.id, active=True, confirmed=True, efforts_ok=False
+        ).count()
+        if bad_debts > 0:
+            debtor.key_status = "inactive"
+        elif debtor.key_status == "inactive":
             debtor.key_status = "active"
-            debtor.debt_disputed = False
-            debtor.dispute_note  = None
     db.session.commit()
 
 
@@ -634,15 +645,24 @@ def dashboard():
         return redirect(url_for("generate_keys"))
     pending_count     = User.query.filter_by(approved=False).count() if user.is_admin else 0
     flag_review_count = CompromiseFlag.query.filter_by(upheld=None).count() if user.is_admin else 0
+    dispute_count     = (Debt.query.filter_by(active=True, dispute_status="open").count()
+                         if user.is_admin else 0)
     # Debts where I am creditor and have marked no-efforts
-    my_inactive_credits = Debt.query.filter_by(creditor_id=user.id, active=True, efforts_ok=False).count()
+    my_inactive_credits = Debt.query.filter_by(creditor_id=user.id, active=True,
+                                               confirmed=True, efforts_ok=False).count()
     # My own key status info
-    my_bad_debts = Debt.query.filter_by(debtor_id=user.id, active=True, efforts_ok=False).count()
+    my_bad_debts = Debt.query.filter_by(debtor_id=user.id, active=True,
+                                        confirmed=True, efforts_ok=False).count()
+    # Debts recorded against me that I haven't confirmed or rejected yet
+    my_pending_debts = Debt.query.filter_by(debtor_id=user.id, active=True,
+                                            confirmed=False).count()
     return render_template("dashboard.html",
         pending_count=pending_count,
         flag_review_count=flag_review_count,
+        dispute_count=dispute_count,
         my_bad_debts=my_bad_debts,
         my_inactive_credits=my_inactive_credits,
+        my_pending_debts=my_pending_debts,
     )
 
 
@@ -720,20 +740,18 @@ def annotate(target_id):
 @app.route("/debt/add", methods=["GET", "POST"])
 @login_required
 def add_debt():
+    """The creditor records a debt owed to them; it counts once the debtor confirms."""
     user  = current_user()
-    peers = User.query.filter_by(approved=True, has_keys=True).all()
+    peers = User.query.filter(User.approved.is_(True), User.has_keys.is_(True),
+                              User.id != user.id).all()
     if request.method == "POST":
         peer_ids    = {p.id for p in peers}
-        debtor_id   = request.form.get("debtor_id",   type=int)
-        creditor_id = request.form.get("creditor_id", type=int)
+        debtor_id   = request.form.get("debtor_id", type=int)
         description = request.form.get("description", "").strip()[:300]
         amount      = parse_amount(request.form.get("amount"))
         currency    = request.form.get("currency", "USD").strip().upper()[:10]
-        if debtor_id not in peer_ids or creditor_id not in peer_ids:
-            flash("Pick a debtor and creditor from the member list.", "error")
-            return render_template("add_debt.html", peers=peers, me=user)
-        if debtor_id == creditor_id:
-            flash("Debtor and creditor cannot be the same person.", "error")
+        if debtor_id not in peer_ids:
+            flash("Pick the member who owes you from the list.", "error")
             return render_template("add_debt.html", peers=peers, me=user)
         if not description:
             flash("Description is required.", "error")
@@ -744,21 +762,63 @@ def add_debt():
         if not currency.isalnum():
             flash("Currency must be letters or digits, e.g. USD.", "error")
             return render_template("add_debt.html", peers=peers, me=user)
-        db.session.add(Debt(debtor_id=debtor_id, creditor_id=creditor_id,
+        db.session.add(Debt(debtor_id=debtor_id, creditor_id=user.id,
                             description=description, amount=amount, currency=currency))
         db.session.commit()
-        flash("Debt recorded.", "success")
+        flash("Debt recorded. It takes effect once the debtor confirms it.", "success")
         return redirect(url_for("key_directory"))
     return render_template("add_debt.html", peers=peers, me=user)
+
+
+@app.route("/debt/confirm/<int:debt_id>", methods=["POST"])
+@login_required
+def confirm_debt(debt_id):
+    """The debtor (or an admin) accepts a pending debt."""
+    debt = db.get_or_404(Debt, debt_id)
+    user = current_user()
+    if user.id != debt.debtor_id and not user.is_admin:
+        flash("Only the debtor or an admin can confirm this debt.", "error")
+        return redirect(url_for("key_directory"))
+    if debt.confirmed or not debt.active:
+        flash("This debt is not awaiting confirmation.", "info")
+        return redirect(url_for("key_directory"))
+    debt.confirmed    = True
+    debt.confirmed_at = datetime.utcnow()
+    db.session.commit()
+    recheck_debt_status(debt.debtor)
+    flash("Debt confirmed.", "success")
+    return redirect(url_for("key_directory"))
+
+
+@app.route("/debt/withdraw/<int:debt_id>", methods=["POST"])
+@login_required
+def withdraw_debt(debt_id):
+    """A pending debt can be rejected by the debtor or cancelled by the creditor."""
+    debt = db.get_or_404(Debt, debt_id)
+    user = current_user()
+    if user.id not in (debt.debtor_id, debt.creditor_id) and not user.is_admin:
+        flash("Not authorised.", "error")
+        return redirect(url_for("key_directory"))
+    if debt.confirmed:
+        flash("A confirmed debt can only be reduced or settled by the creditor.", "error")
+        return redirect(url_for("key_directory"))
+    db.session.delete(debt)
+    db.session.commit()
+    flash("Pending debt removed.", "info")
+    return redirect(url_for("key_directory"))
 
 
 @app.route("/debt/reduce/<int:debt_id>", methods=["POST"])
 @login_required
 def reduce_debt(debt_id):
+    """Only the creditor (or an admin) records payments against a confirmed debt."""
     debt = db.get_or_404(Debt, debt_id)
     user = current_user()
-    if user.id not in (debt.debtor_id, debt.creditor_id) and not user.is_admin:
-        flash("Not authorised.", "error")
+    if user.id != debt.creditor_id and not user.is_admin:
+        flash("Only the creditor or an admin can reduce a debt.", "error")
+        return redirect(url_for("key_directory"))
+    if not debt.confirmed or not debt.active:
+        flash("Only confirmed, outstanding debts can be reduced.", "error")
         return redirect(url_for("key_directory"))
     amount = parse_amount(request.form.get("amount"))
     if amount is None:
@@ -766,12 +826,13 @@ def reduce_debt(debt_id):
         return redirect(url_for("key_directory"))
     debt.amount = max(0.0, round(debt.amount - amount, 2))
     if debt.amount == 0:
-        debt.active     = False
-        debt.efforts_ok = True   # settled — clear any no-efforts flag
+        debt.active         = False
+        debt.efforts_ok     = True   # settled — clear any no-efforts flag
+        debt.dispute_status = None
     debt.updated_at = datetime.utcnow()
     db.session.commit()
     recheck_debt_status(debt.debtor)
-    flash("Debt updated.", "success")
+    flash("Debt settled." if not debt.active else "Debt updated.", "success")
     return redirect(url_for("key_directory"))
 
 
@@ -784,8 +845,16 @@ def set_efforts(debt_id):
     if user.id != debt.creditor_id and not user.is_admin:
         flash("Only the creditor or an admin can update effort status.", "error")
         return redirect(url_for("key_directory"))
+    if not debt.confirmed or not debt.active:
+        flash("Effort status only applies to confirmed, outstanding debts.", "error")
+        return redirect(url_for("key_directory"))
     efforts_ok   = request.form.get("efforts_ok") == "1"
     efforts_note = request.form.get("efforts_note", "").strip()[:500]
+    if efforts_ok or debt.efforts_ok:
+        # Lifting a marking, or making a new one: any earlier dispute is moot.
+        debt.dispute_status = None
+        debt.dispute_note   = None
+        debt.disputed_at    = None
     debt.efforts_ok          = efforts_ok
     debt.efforts_note        = efforts_note or None
     debt.efforts_updated_at  = datetime.utcnow()
@@ -799,20 +868,28 @@ def set_efforts(debt_id):
 @app.route("/debt/dispute/<int:debt_id>", methods=["POST"])
 @login_required
 def dispute_debt(debt_id):
-    """Debtor disputes an inactive/no-efforts marking on their key."""
+    """Debtor disputes a no-efforts marking; an admin then keeps or clears it."""
     debt = db.get_or_404(Debt, debt_id)
     user = current_user()
     if user.id != debt.debtor_id:
         flash("Only the debtor can dispute this.", "error")
         return redirect(url_for("key_directory"))
-    if debt.efforts_ok:
+    if not debt.confirmed or not debt.active or debt.efforts_ok:
         flash("This debt is not currently marked as no-efforts.", "info")
         return redirect(url_for("key_directory"))
+    if debt.dispute_status == "open":
+        flash("Your dispute is already waiting for an admin.", "info")
+        return redirect(url_for("key_directory"))
+    if debt.dispute_status == "upheld":
+        flash("An admin has already reviewed this marking.", "info")
+        return redirect(url_for("key_directory"))
     note = request.form.get("dispute_note", "").strip()[:1000]
-    debt.debtor.debt_disputed = True
-    debt.debtor.dispute_note  = note or "Debtor disputes the no-efforts marking."
+    debt.dispute_status = "open"
+    debt.dispute_note   = note or "Debtor disputes the no-efforts marking."
+    debt.disputed_at    = datetime.utcnow()
     db.session.commit()
-    flash("Dispute recorded. It is now visible on your key.", "info")
+    recheck_debt_status(debt.debtor)
+    flash("Dispute submitted. An admin will review it; your key stays inactive until then.", "info")
     return redirect(url_for("key_directory"))
 
 
@@ -907,8 +984,35 @@ def admin_flags():
                ).order_by(CompromiseFlag.reviewed_at.desc()).limit(50).all()
     inactive_users = User.query.filter_by(key_status="inactive").all()
     revoked_users  = User.query.filter_by(key_status="revoked").all()
+    open_disputes  = Debt.query.filter_by(active=True, dispute_status="open").order_by(
+                         Debt.disputed_at.asc()).all()
     return render_template("admin_flags.html", pending=pending, reviewed=reviewed,
-                           inactive_users=inactive_users, revoked_users=revoked_users)
+                           inactive_users=inactive_users, revoked_users=revoked_users,
+                           open_disputes=open_disputes)
+
+
+@app.route("/admin/debt/<int:debt_id>/dispute/<decision>", methods=["POST"])
+@admin_required
+def resolve_dispute(debt_id, decision):
+    """Admin keeps the creditor's no-efforts marking ('uphold') or lifts it ('clear')."""
+    if decision not in ("uphold", "clear"):
+        abort(404)
+    debt = db.get_or_404(Debt, debt_id)
+    if debt.dispute_status != "open" or not debt.active:
+        flash("This dispute is no longer open.", "info")
+        return redirect(url_for("admin_flags"))
+    if decision == "uphold":
+        debt.dispute_status = "upheld"
+        flash(f"Marking kept; {debt.debtor.username}'s key stays inactive.", "warning")
+    else:
+        debt.dispute_status     = None
+        debt.efforts_ok         = True
+        debt.efforts_note       = "Cleared by an admin after the debtor's dispute."
+        debt.efforts_updated_at = datetime.utcnow()
+        flash(f"Marking cleared for {debt.debtor.username}.", "success")
+    db.session.commit()
+    recheck_debt_status(debt.debtor)
+    return redirect(url_for("admin_flags"))
 
 
 @app.route("/admin/flags/<int:flag_id>/uphold", methods=["POST"])
@@ -969,9 +1073,31 @@ def reinstate_key(user_id):
 # Bootstrap
 # ---------------------------------------------------------------------------
 
+def add_missing_columns():
+    """create_all() never alters existing tables, so add columns introduced
+    after a database was created. Stopgap until the app uses real migrations."""
+    new_columns = {
+        "debt": {
+            "confirmed":      "BOOLEAN DEFAULT 0",
+            "confirmed_at":   "DATETIME",
+            "dispute_status": "VARCHAR(16)",
+            "dispute_note":   "TEXT",
+            "disputed_at":    "DATETIME",
+        },
+    }
+    inspector = db.inspect(db.engine)
+    for table, columns in new_columns.items():
+        existing = {c["name"] for c in inspector.get_columns(table)}
+        for name, ddl in columns.items():
+            if name not in existing:
+                db.session.execute(db.text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+    db.session.commit()
+
+
 def create_tables():
     with app.app_context():
         db.create_all()
+        add_missing_columns()
         purge_stale_key_temps()
         if not User.query.filter_by(is_admin=True).first():
             password = os.environ.get("ADMIN_PASSWORD") or secrets.token_urlsafe(18)

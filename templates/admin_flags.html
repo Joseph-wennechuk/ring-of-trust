@@ -36,6 +36,39 @@
     <p class="dir-page__empty">No pending flags.</p>
   {% endif %}
 
+  <!-- Debt disputes -->
+  <h3 class="section-title" style="margin-top:2rem">Debt Disputes</h3>
+  {% if open_disputes %}
+  <table class="table">
+    <thead><tr><th>Debtor</th><th>Creditor</th><th>Debt</th><th>Creditor's note</th><th>Debtor's statement</th><th>Decision</th></tr></thead>
+    <tbody>
+    {% for d in open_disputes %}
+    <tr>
+      <td>{{ d.debtor.username }}</td>
+      <td>{{ d.creditor.username }}</td>
+      <td>{{ d.description }} · {{ "%.2f"|format(d.amount) }} {{ d.currency }}</td>
+      <td>{{ d.efforts_note or '—' }}</td>
+      <td>{{ d.dispute_note }}</td>
+      <td class="table__actions">
+        <form method="POST" action="{{ url_for('resolve_dispute', debt_id=d.id, decision='clear') }}" class="inline-form"
+              data-confirm="Clear the no-efforts marking? The debtor's key may reactivate.">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn--xs btn--primary">Clear Marking</button>
+        </form>
+        <form method="POST" action="{{ url_for('resolve_dispute', debt_id=d.id, decision='uphold') }}" class="inline-form"
+              data-confirm="Keep the marking? The debtor can't dispute it again.">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn--xs btn--warn">Keep Marking</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="dir-page__empty">No open debt disputes.</p>
+  {% endif %}
+
   <!-- Inactive keys -->
   {% if inactive_users %}
   <h3 class="section-title" style="margin-top:2rem">Inactive Keys (debt non-repayment)</h3>
@@ -47,10 +80,11 @@
       <td>{{ u.username }}{% if u.debt_disputed %} <span class="status-tag status-tag--disputed">DISPUTED</span>{% endif %}</td>
       <td>{{ u.dispute_note or '—' }}</td>
       <td class="table__actions">
-        <form method="POST" action="{{ url_for('revoke_key', user_id=u.id) }}" class="inline-form">
+        <form method="POST" action="{{ url_for('revoke_key', user_id=u.id) }}" class="inline-form"
+              data-confirm="Revoke this key?">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="text" name="note" placeholder="Revocation reason…" class="form__input form__input--sm">
-          <button class="btn btn--xs btn--danger" onclick="return confirm('Revoke this key?')">Revoke Key</button>
+          <button class="btn btn--xs btn--danger">Revoke Key</button>
         </form>
       </td>
     </tr>
@@ -71,9 +105,9 @@
       <td>{{ u.revoked_at.strftime('%Y-%m-%d') if u.revoked_at else '—' }}</td>
       <td>{{ u.revoke_note or '—' }}</td>
       <td class="table__actions">
-        <form method="POST" action="{{ url_for('reinstate_key', user_id=u.id) }}">
+        <form method="POST" action="{{ url_for('reinstate_key', user_id=u.id) }}" data-confirm="Reinstate this key?">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button class="btn btn--xs btn--ghost" onclick="return confirm('Reinstate this key?')">Reinstate</button>
+          <button class="btn btn--xs btn--ghost">Reinstate</button>
         </form>
       </td>
     </tr>

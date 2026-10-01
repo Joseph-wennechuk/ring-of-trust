@@ -9,7 +9,16 @@
     ⛔ <strong>Your key is inactive.</strong>
     {{ my_bad_debts }} of your debt{{ 's' if my_bad_debts != 1 }} {{ 'have' if my_bad_debts != 1 else 'has' }} been marked as no efforts by the creditor.
     Your key will reactivate once the creditor confirms you are making efforts, or once the debt is settled.
-    You can dispute this in the Key Directory.
+    You can dispute a marking in the Key Directory; an admin will review it.
+  </div>
+  {% endif %}
+
+  {% if my_pending_debts > 0 %}
+  <div class="info-box info-box--warn" style="margin-bottom:1.5rem">
+    📒 <strong>{{ my_pending_debts }} debt{{ 's' if my_pending_debts != 1 }} recorded against you
+    {{ 'are' if my_pending_debts != 1 else 'is' }} waiting for your confirmation.</strong>
+    {{ 'They have' if my_pending_debts != 1 else 'It has' }} no effect until you confirm.
+    Review in the <a href="{{ url_for('key_directory') }}">Key Directory</a>.
   </div>
   {% endif %}
 
@@ -22,7 +31,7 @@
     <a href="{{ url_for('add_debt') }}" class="dash-card">
       <span class="dash-card__icon">📒</span>
       <span class="dash-card__label">Record Debt</span>
-      <span class="dash-card__desc">Log outstanding debts between members</span>
+      <span class="dash-card__desc">Record a debt someone owes you</span>
     </a>
     {% if current_user.is_admin %}
     <a href="{{ url_for('admin_panel') }}" class="dash-card dash-card--admin">
@@ -37,6 +46,7 @@
       <span class="dash-card__label">Security Flags</span>
       <span class="dash-card__desc">Review opsec reports
         {% if flag_review_count > 0 %}<span class="badge badge--warn">{{ flag_review_count }}</span>{% endif %}
+        {% if dispute_count > 0 %}· debt disputes <span class="badge badge--warn">{{ dispute_count }}</span>{% endif %}
       </span>
     </a>
     {% endif %}

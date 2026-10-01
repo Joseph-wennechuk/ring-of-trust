@@ -192,12 +192,14 @@ select.form__input { appearance: none; }
             padding: 0.5rem 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; }
 .debt-row--ok  { border: 1px solid var(--border); }
 .debt-row--bad { border: 1px solid var(--inactive); }
+.debt-row--pending { border: 1px dashed var(--dim); opacity: 0.85; }
 .debt-row__info { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; font-size: 0.82rem; }
 .debt-row__amount { font-family: var(--mono); color: var(--danger); font-weight: 600; }
 .debt-row__to     { color: var(--dim); }
 .debt-row__tag    { font-family: var(--mono); font-size: 0.7rem; background: rgba(224,122,42,0.2);
                     color: var(--inactive); border: 1px solid var(--inactive);
                     padding: 0.1em 0.4em; border-radius: 2px; }
+.debt-row__tag--pending { background: none; color: var(--dim); border-color: var(--dim); }
 .debt-row__efnote { font-size: 0.78rem; color: var(--dim); font-style: italic; }
 
 /* Efforts + dispute forms */

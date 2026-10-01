@@ -4,20 +4,13 @@
 <div class="form-page form-page--wide">
   <h2 class="form-page__title">Record a Debt</h2>
   <div class="info-box">
-    <p>Debts are displayed publicly next to the debtor's public key. The creditor or an admin can mark the debtor as "not making efforts", which deactivates their key until efforts resume or the debt is settled. The debtor may dispute this publicly.</p>
+    <p>Record a debt someone owes <strong>you</strong>. It stays pending, with no effect on their key, until they confirm it (or an admin does). They can reject it, and you can cancel it while it's pending.</p>
+    <p>Once confirmed, only you or an admin can record payments. If you mark the debtor as "not making efforts", their key becomes inactive. They can dispute that, and an admin decides.</p>
   </div>
   <form method="POST" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label class="form__label">Debtor (who owes)
+    <label class="form__label">Who owes you
       <select class="form__input" name="debtor_id" required>
-        <option value="">— select member —</option>
-        {% for p in peers %}
-          <option value="{{ p.id }}">{{ p.username }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label class="form__label">Creditor (who is owed)
-      <select class="form__input" name="creditor_id" required>
         <option value="">— select member —</option>
         {% for p in peers %}
           <option value="{{ p.id }}">{{ p.username }}</option>

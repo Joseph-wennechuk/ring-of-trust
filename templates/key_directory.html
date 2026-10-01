@@ -5,7 +5,7 @@
   <h2 class="form-page__title">Key Directory</h2>
   <p class="dir-page__intro">
     All approved members with registered keys.
-    A key becomes <strong>inactive</strong> when a creditor or admin marks the debtor as not making efforts to repay.
+    A key becomes <strong>inactive</strong> when a creditor or admin marks the debtor as not making efforts to repay a confirmed debt.
     The debtor can <strong>dispute</strong> this publicly.
     Security flags are informational only and do not affect key status.
   </p>
@@ -71,59 +71,81 @@
     <div class="key-card__debts">
       <strong>Outstanding debts:</strong>
       {% for d in entry.debts %}
-      <div class="debt-row debt-row--{% if d.efforts_ok %}ok{% else %}bad{% endif %}">
+      <div class="debt-row debt-row--{% if not d.confirmed %}pending{% elif d.efforts_ok %}ok{% else %}bad{% endif %}">
         <div class="debt-row__info">
           <span class="debt-row__desc">{{ d.description }}</span>
           <span class="debt-row__amount">{{ "%.2f"|format(d.amount) }} {{ d.currency }}</span>
           <span class="debt-row__to">→ {{ d.creditor.username }}</span>
-          {% if not d.efforts_ok %}
+          {% if not d.confirmed %}
+            <span class="debt-row__tag debt-row__tag--pending">PENDING CONFIRMATION</span>
+          {% elif not d.efforts_ok %}
             <span class="debt-row__tag">NO EFFORTS</span>
             {% if d.efforts_note %}<span class="debt-row__efnote">{{ d.efforts_note }}</span>{% endif %}
+            {% if d.dispute_status == 'open' %}
+              <span class="debt-row__efnote">⚡ Disputed, awaiting admin: {{ d.dispute_note }}</span>
+            {% elif d.dispute_status == 'upheld' %}
+              <span class="debt-row__efnote">Dispute reviewed; an admin kept this marking.</span>
+            {% endif %}
           {% endif %}
         </div>
-        <!-- Reduce (debtor, creditor, or admin) -->
-        {% if entry.is_own or d.creditor_id == me.id or me.is_admin %}
-        <form method="POST" action="{{ url_for('reduce_debt', debt_id=d.id) }}" class="inline-form">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="number" name="amount" min="0.01" max="{{ d.amount }}" step="0.01"
-                 placeholder="reduce by…" class="form__input form__input--sm">
-          <button class="btn btn--xs">Reduce</button>
-        </form>
-        {% endif %}
-        <!-- Set efforts (creditor or admin only) -->
-        {% if d.creditor_id == me.id or me.is_admin %}
-        <details class="efforts-form">
-          <summary class="btn btn--xs btn--ghost">Set Efforts</summary>
-          <form method="POST" action="{{ url_for('set_efforts', debt_id=d.id) }}" class="efforts-form__body">
+        {% if not d.confirmed %}
+          <!-- Pending: debtor (or admin) confirms; debtor rejects or creditor cancels -->
+          {% if entry.is_own or me.is_admin %}
+          <form method="POST" action="{{ url_for('confirm_debt', debt_id=d.id) }}" class="inline-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <label class="form__label">Status
-              <select name="efforts_ok" class="form__input">
-                <option value="1" {% if d.efforts_ok %}selected{% endif %}>Making efforts ✓</option>
-                <option value="0" {% if not d.efforts_ok %}selected{% endif %}>NOT making efforts ✗</option>
-              </select>
-            </label>
-            <label class="form__label">Note (optional)
-              <input type="text" name="efforts_note" class="form__input"
-                     placeholder="Brief reason…" maxlength="500"
-                     value="{{ d.efforts_note or '' }}">
-            </label>
-            <button class="btn btn--xs btn--primary" type="submit">Update</button>
+            <button class="btn btn--xs btn--primary">Confirm</button>
           </form>
-        </details>
-        {% endif %}
-        <!-- Dispute (debtor only, when efforts_ok=False) -->
-        {% if entry.is_own and not d.efforts_ok %}
-        <details class="efforts-form">
-          <summary class="btn btn--xs btn--warn">Dispute</summary>
-          <form method="POST" action="{{ url_for('dispute_debt', debt_id=d.id) }}" class="efforts-form__body">
+          {% endif %}
+          {% if entry.is_own or d.creditor_id == me.id or me.is_admin %}
+          <form method="POST" action="{{ url_for('withdraw_debt', debt_id=d.id) }}" class="inline-form"
+                data-confirm="Remove this pending debt?">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <label class="form__label">Your statement
-              <textarea name="dispute_note" class="form__input form__input--ta" rows="2"
-                        placeholder="Explain why this marking is incorrect…" maxlength="1000"></textarea>
-            </label>
-            <button class="btn btn--xs btn--warn" type="submit">Submit Dispute</button>
+            <button class="btn btn--xs btn--ghost">{% if entry.is_own %}Reject{% else %}Cancel{% endif %}</button>
           </form>
-        </details>
+          {% endif %}
+        {% else %}
+          <!-- Reduce (creditor or admin) -->
+          {% if d.creditor_id == me.id or me.is_admin %}
+          <form method="POST" action="{{ url_for('reduce_debt', debt_id=d.id) }}" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="number" name="amount" min="0.01" max="{{ d.amount }}" step="0.01"
+                   placeholder="payment received…" class="form__input form__input--sm">
+            <button class="btn btn--xs">Record Payment</button>
+          </form>
+          <!-- Set efforts (creditor or admin only) -->
+          <details class="efforts-form">
+            <summary class="btn btn--xs btn--ghost">Set Efforts</summary>
+            <form method="POST" action="{{ url_for('set_efforts', debt_id=d.id) }}" class="efforts-form__body">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <label class="form__label">Status
+                <select name="efforts_ok" class="form__input">
+                  <option value="1" {% if d.efforts_ok %}selected{% endif %}>Making efforts ✓</option>
+                  <option value="0" {% if not d.efforts_ok %}selected{% endif %}>NOT making efforts ✗</option>
+                </select>
+              </label>
+              <label class="form__label">Note (optional)
+                <input type="text" name="efforts_note" class="form__input"
+                       placeholder="Brief reason…" maxlength="500"
+                       value="{{ d.efforts_note or '' }}">
+              </label>
+              <button class="btn btn--xs btn--primary" type="submit">Update</button>
+            </form>
+          </details>
+          {% endif %}
+          <!-- Dispute (debtor only, once per no-efforts marking) -->
+          {% if entry.is_own and not d.efforts_ok and not d.dispute_status %}
+          <details class="efforts-form">
+            <summary class="btn btn--xs btn--warn">Dispute</summary>
+            <form method="POST" action="{{ url_for('dispute_debt', debt_id=d.id) }}" class="efforts-form__body">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <label class="form__label">Your statement for the admins
+                <textarea name="dispute_note" class="form__input form__input--ta" rows="2"
+                          placeholder="Explain why this marking is incorrect…" maxlength="1000"></textarea>
+              </label>
+              <button class="btn btn--xs btn--warn" type="submit">Submit Dispute</button>
+            </form>
+          </details>
+          {% endif %}
         {% endif %}
       </div>
       {% endfor %}
