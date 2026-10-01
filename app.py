@@ -1055,7 +1055,19 @@ def create_tables():
                 print("Save this password now. It will not be shown again.")
 
 
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
 if __name__ == "__main__":
+    # The Werkzeug debugger can run arbitrary code, so it is opt-in, and never
+    # allowed on an address other machines can reach.
+    debug = os.environ.get("FLASK_DEBUG") == "1"
+    host  = os.environ.get("HOST", "127.0.0.1")
+    port  = int(os.environ.get("PORT", 5000))
+    if debug and host not in LOOPBACK_HOSTS:
+        raise SystemExit(f"Refusing to start: the debugger can't be reachable from the "
+                         f"network (HOST={host}). Unset FLASK_DEBUG or use HOST=127.0.0.1.")
     create_tables()
-    # The Werkzeug debugger can run arbitrary code, so it is opt-in.
-    app.run(debug=os.environ.get("FLASK_DEBUG") == "1", host="127.0.0.1", port=5000)
+    if host not in LOOPBACK_HOSTS:
+        print(f"WARNING: listening on {host}:{port} over plain HTTP. Anyone on this network can "
+              f"reach the site, and passwords travel unencrypted. Use only on a network you trust.")
+    app.run(debug=debug, host=host, port=port)

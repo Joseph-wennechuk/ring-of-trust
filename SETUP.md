@@ -129,6 +129,11 @@ to the rest of the network.
   ADMIN_PASSWORD   Password for the admin account created on first run
   FLASK_DEBUG      Set to 1 to enable the debugger with `python app.py`.
                    Never in production: it can run arbitrary code.
+  HOST             Address `python app.py` listens on (default 127.0.0.1, this
+                   computer only). HOST=0.0.0.0 lets other devices on your network
+                   connect, over plain HTTP: only on a network you trust. Refused
+                   while FLASK_DEBUG=1.
+  PORT             Port for `python app.py` (default 5000)
   FLAG_THRESHOLD   How many opsec flags trigger the visual warning (default: 3)
 
 Set in PowerShell before running:

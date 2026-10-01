@@ -46,6 +46,17 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
+  // Browsers only provide WebCrypto (crypto.subtle), which OpenPGP.js needs,
+  // on HTTPS pages or on localhost. Say so instead of failing cryptically.
+  if (!window.isSecureContext || !(window.crypto && window.crypto.subtle)) {
+    $("kg-generate").disabled = true;
+    $("kg-status").textContent =
+      "Your browser only allows key generation over a secure connection (HTTPS), " +
+      "or on this computer at http://127.0.0.1. Open the site that way, or use " +
+      "\"I already have a PGP key\" below.";
+    return;
+  }
+
   $("kg-generate").addEventListener("click", async function () {
     var pass = $("kg-passphrase").value, confirm = $("kg-confirm").value;
     if (pass.length < 12) { $("kg-status").textContent = "Passphrase must be at least 12 characters."; return; }
