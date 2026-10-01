@@ -20,7 +20,11 @@
         <a href="{{ url_for('admin_panel') }}" class="admin-link">Admin</a>
         <a href="{{ url_for('admin_flags') }}" class="flag-link">Flags</a>
       {% endif %}
-      <a href="{{ url_for('logout') }}" class="logout">Logout</a>
+      <a href="{{ url_for('change_password') }}">Password</a>
+      <form method="POST" action="{{ url_for('logout') }}" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="logout">Logout</button>
+      </form>
     </div>
   </nav>
   {% endif %}
@@ -37,5 +41,6 @@
     {% block content %}{% endblock %}
   </main>
   <footer class="footer">GHETTO-PASS // PGP WEB-OF-TRUST NETWORK</footer>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

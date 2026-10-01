@@ -22,9 +22,15 @@
         <td>{{ u.email }}</td>
         <td>{{ u.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
         <td class="table__actions">
-          <a href="{{ url_for('approve_user', user_id=u.id) }}" class="btn btn--sm btn--primary">Approve</a>
-          <a href="{{ url_for('reject_user',  user_id=u.id) }}" class="btn btn--sm btn--danger"
-             onclick="return confirm('Remove this registration?')">Reject</a>
+          <form method="POST" action="{{ url_for('approve_user', user_id=u.id) }}" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn--sm btn--primary">Approve</button>
+          </form>
+          <form method="POST" action="{{ url_for('reject_user', user_id=u.id) }}" class="inline-form"
+                data-confirm="Remove this registration?">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn--sm btn--danger">Reject</button>
+          </form>
         </td>
       </tr>
       {% endfor %}
@@ -47,7 +53,12 @@
         <td>{{ '✓' if u.has_keys else '✗' }}</td>
         <td>{{ '✓' if u.is_admin else '—' }}</td>
         <td class="table__actions">
-          <a href="{{ url_for('toggle_admin', user_id=u.id) }}" class="btn btn--xs btn--ghost">Toggle Admin</a>
+          {% if u.id != current_user.id %}
+          <form method="POST" action="{{ url_for('toggle_admin', user_id=u.id) }}" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn--xs btn--ghost">Toggle Admin</button>
+          </form>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}

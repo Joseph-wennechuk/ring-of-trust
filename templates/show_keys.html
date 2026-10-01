@@ -4,7 +4,7 @@
 <div class="keys-page">
   <h2 class="form-page__title">Your Keys Are Ready</h2>
   <div class="info-box info-box--warn">
-    <strong>IMPORTANT:</strong> Download your key bundle now. Your private key and mnemonic are shown here once and are NOT stored by the server. After navigating away or clicking Continue, they are gone.
+    <strong>IMPORTANT:</strong> Download your key bundle now. Your private key and mnemonic are removed from the server when you download them, click Continue, or after 30 minutes, whichever comes first. After that they cannot be recovered.
   </div>
   <div class="qr-grid">
     <div class="qr-card">
@@ -25,8 +25,15 @@
     </div>
   </div>
   <div class="keys-page__actions">
-    <a href="{{ url_for('download_keys') }}" class="btn btn--primary btn--large">⬇ Download Key Bundle (ZIP)</a>
-    <a href="{{ url_for('dashboard') }}" class="btn btn--ghost">Continue to Dashboard (clears keys)</a>
+    <form method="POST" action="{{ url_for('download_keys') }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn--primary btn--large">⬇ Download Key Bundle (ZIP)</button>
+    </form>
+    <form method="POST" action="{{ url_for('discard_keys') }}" class="inline-form"
+          data-confirm="Have you downloaded your key bundle? It cannot be recovered after this.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn--ghost">Continue to Dashboard (clears keys)</button>
+    </form>
   </div>
 </div>
 {% endblock %}

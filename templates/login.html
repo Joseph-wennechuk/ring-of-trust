@@ -4,6 +4,7 @@
 <div class="form-page">
   <h2 class="form-page__title">Login</h2>
   <form method="POST" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label class="form__label">Username
       <input class="form__input" type="text" name="username" required autofocus>
     </label>

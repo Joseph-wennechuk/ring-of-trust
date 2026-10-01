@@ -7,6 +7,7 @@
     <p>Debts are displayed publicly next to the debtor's public key. The creditor or an admin can mark the debtor as "not making efforts", which deactivates their key until efforts resume or the debt is settled. The debtor may dispute this publicly.</p>
   </div>
   <form method="POST" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label class="form__label">Debtor (who owes)
       <select class="form__input" name="debtor_id" required>
         <option value="">— select member —</option>

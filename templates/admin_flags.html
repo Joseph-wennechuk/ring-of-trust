@@ -21,8 +21,14 @@
       </div>
       {% if f.notes %}<p class="flag-admin-card__notes">{{ f.notes }}</p>{% endif %}
       <div class="flag-admin-card__actions">
-        <a href="{{ url_for('uphold_flag', flag_id=f.id) }}" class="btn btn--sm btn--warn">Uphold</a>
-        <a href="{{ url_for('dismiss_flag', flag_id=f.id) }}" class="btn btn--sm btn--ghost">Dismiss</a>
+        <form method="POST" action="{{ url_for('uphold_flag', flag_id=f.id) }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn--sm btn--warn">Uphold</button>
+        </form>
+        <form method="POST" action="{{ url_for('dismiss_flag', flag_id=f.id) }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn--sm btn--ghost">Dismiss</button>
+        </form>
       </div>
     </div>
     {% endfor %}
@@ -42,6 +48,7 @@
       <td>{{ u.dispute_note or '—' }}</td>
       <td class="table__actions">
         <form method="POST" action="{{ url_for('revoke_key', user_id=u.id) }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="text" name="note" placeholder="Revocation reason…" class="form__input form__input--sm">
           <button class="btn btn--xs btn--danger" onclick="return confirm('Revoke this key?')">Revoke Key</button>
         </form>
@@ -65,6 +72,7 @@
       <td>{{ u.revoke_note or '—' }}</td>
       <td class="table__actions">
         <form method="POST" action="{{ url_for('reinstate_key', user_id=u.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="btn btn--xs btn--ghost" onclick="return confirm('Reinstate this key?')">Reinstate</button>
         </form>
       </td>

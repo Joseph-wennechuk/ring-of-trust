@@ -1,14 +1,19 @@
 import os
 import io
+import re
+import hmac
 import json
+import math
+import time
 import base64
 import secrets
 import zipfile
-from datetime import datetime
+from collections import defaultdict, deque
+from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import (Flask, render_template, request, redirect, url_for,
-                   session, flash, send_file)
+                   session, flash, send_file, abort, g)
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import gnupg
@@ -19,26 +24,56 @@ from mnemonic import Mnemonic
 # App setup
 # ---------------------------------------------------------------------------
 
+# `python app.py` runs the local development server. Anything else (gunicorn,
+# waitress, ...) is treated as production and gets the strict settings.
+RUNNING_DEV_SERVER = __name__ == "__main__"
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///rot.db"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+secret_key = os.environ.get("SECRET_KEY")
+if not secret_key:
+    if not RUNNING_DEV_SERVER:
+        raise RuntimeError("SECRET_KEY must be set when running in production.")
+    secret_key = secrets.token_hex(32)
+app.secret_key = secret_key
+
+app.config.update(
+    SQLALCHEMY_DATABASE_URI="sqlite:///rot.db",
+    SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    # Browsers only send Secure cookies over HTTPS, so the dev server needs it off.
+    SESSION_COOKIE_SECURE=not RUNNING_DEV_SERVER,
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    MAX_CONTENT_LENGTH=64 * 1024,
+)
 
 FLAG_THRESHOLD = int(os.environ.get("FLAG_THRESHOLD", 3))
+
+# Only used to spot the old hard-coded admin password and force a change.
+LEGACY_DEFAULT_PASSWORD = "changeme123!"
+MIN_PASSWORD_LENGTH = 12
+MAX_PASSWORD_LENGTH = 1024
+USERNAME_RE = re.compile(r"[A-Za-z0-9_.-]{3,32}")
+EMAIL_RE    = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 db = SQLAlchemy(app)
 
 GPG_HOME  = os.path.join(os.path.dirname(__file__), "instance", "gnupg")
 KEYS_TEMP = os.path.join(os.path.dirname(__file__), "instance", "keytemp")
-os.makedirs(GPG_HOME,  exist_ok=True)
-os.makedirs(KEYS_TEMP, exist_ok=True)
+os.makedirs(GPG_HOME,  mode=0o700, exist_ok=True)
+os.makedirs(KEYS_TEMP, mode=0o700, exist_ok=True)
 gpg = gnupg.GPG(gnupghome=GPG_HOME, options=["--pinentry-mode", "loopback"])
 gpg.encoding = "utf-8"
+
+# Freshly generated key bundles wait here until downloaded, at most this long.
+KEYS_TEMP_TTL = 30 * 60
 
 
 def save_key_temp(user_id, data):
     path = os.path.join(KEYS_TEMP, f"{user_id}.json")
-    with open(path, "w") as f:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(data, f)
 
 
@@ -46,8 +81,19 @@ def load_key_temp(user_id):
     path = os.path.join(KEYS_TEMP, f"{user_id}.json")
     if not os.path.exists(path):
         return None
+    if time.time() - os.path.getmtime(path) > KEYS_TEMP_TTL:
+        os.remove(path)
+        return None
     with open(path) as f:
         return json.load(f)
+
+
+def purge_stale_key_temps():
+    now = time.time()
+    for name in os.listdir(KEYS_TEMP):
+        path = os.path.join(KEYS_TEMP, name)
+        if os.path.isfile(path) and now - os.path.getmtime(path) > KEYS_TEMP_TTL:
+            os.remove(path)
 
 
 def delete_key_temp(user_id):
@@ -156,37 +202,147 @@ class CompromiseFlag(db.Model):
 # Helpers
 # ---------------------------------------------------------------------------
 
+def password_marker(user):
+    """Ties a session to the password it was created with, so changing the
+    password logs out every other session."""
+    return user.password[-16:]
+
+
+def current_user():
+    """The logged-in user, re-checked against the database on every request."""
+    if "user" not in g:
+        user = None
+        user_id = session.get("user_id")
+        if user_id is not None:
+            user = db.session.get(User, user_id)
+            if (not user or not user.approved
+                    or session.get("pw_marker") != password_marker(user)):
+                session.clear()
+                user = None
+        g.user = user
+    return g.user
+
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if "user_id" not in session:
+        if not current_user():
             return redirect(url_for("login"))
+        if (session.get("must_change_password")
+                and request.endpoint not in ("change_password", "logout")):
+            return redirect(url_for("change_password"))
         return f(*args, **kwargs)
     return decorated
 
 
 def admin_required(f):
     @wraps(f)
+    @login_required
     def decorated(*args, **kwargs):
-        if "user_id" not in session:
-            return redirect(url_for("login"))
-        user = db.session.get(User, session["user_id"])
-        if not user or not user.is_admin:
+        if not current_user().is_admin:
             flash("Admin access required.", "error")
             return redirect(url_for("dashboard"))
         return f(*args, **kwargs)
     return decorated
 
 
-def current_user():
-    if "user_id" in session:
-        return db.session.get(User, session["user_id"])
-    return None
+def csrf_token():
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_urlsafe(32)
+    return session["csrf_token"]
+
+
+@app.before_request
+def check_csrf():
+    if request.method == "POST":
+        sent     = request.form.get("csrf_token", "")
+        expected = session.get("csrf_token", "")
+        if not expected or not hmac.compare_digest(sent, expected):
+            abort(400, "Missing or invalid form token. Reload the page and try again.")
+
+
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src https://fonts.gstatic.com",
+    "img-src 'self' data:",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+])
+
+
+@app.after_request
+def set_security_headers(response):
+    response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+    response.headers["X-Content-Type-Options"]  = "nosniff"
+    response.headers["X-Frame-Options"]         = "DENY"
+    response.headers["Referrer-Policy"]         = "no-referrer"
+    if request.endpoint != "static":
+        # Pages show private data, so keep them out of browser and proxy caches.
+        response.headers["Cache-Control"] = "no-store"
+    if app.config["SESSION_COOKIE_SECURE"]:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return response
 
 
 @app.context_processor
 def inject_globals():
-    return dict(current_user=current_user(), FLAG_THRESHOLD=FLAG_THRESHOLD)
+    return dict(current_user=current_user(), FLAG_THRESHOLD=FLAG_THRESHOLD,
+                csrf_token=csrf_token)
+
+
+# Failed logins per client address and per username. Kept in memory, so it is
+# per-process and resets on restart; run a single worker or move this to Redis.
+LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW       = 15 * 60
+_login_failures    = defaultdict(deque)
+# Checked when the username doesn't exist, so both cases take the same time.
+_DUMMY_HASH        = generate_password_hash(secrets.token_hex(16))
+
+
+def _login_keys(username):
+    return (f"ip:{request.remote_addr}", f"user:{username.lower()}")
+
+
+def login_blocked(username):
+    now = time.monotonic()
+    blocked = False
+    for key in _login_keys(username):
+        failures = _login_failures.get(key)
+        if not failures:
+            continue
+        while failures and now - failures[0] > LOGIN_WINDOW:
+            failures.popleft()
+        if not failures:
+            del _login_failures[key]
+        elif len(failures) >= LOGIN_MAX_FAILURES:
+            blocked = True
+    return blocked
+
+
+def record_login_failure(username):
+    now = time.monotonic()
+    for key in _login_keys(username):
+        _login_failures[key].append(now)
+
+
+def clear_login_failures(username):
+    for key in _login_keys(username):
+        _login_failures.pop(key, None)
+
+
+def parse_amount(raw):
+    """A positive, finite money amount, or None."""
+    try:
+        amount = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(amount) or amount <= 0 or amount > 1e12:
+        return None
+    return round(amount, 2)
 
 
 def make_qr_b64(data: str) -> str:
@@ -227,17 +383,37 @@ def recheck_debt_status(debtor: User):
 
 @app.route("/")
 def index():
-    if "user_id" in session:
+    if current_user():
         return redirect(url_for("dashboard"))
     return render_template("index.html")
+
+
+def password_problem(password):
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return f"Password must be at least {MIN_PASSWORD_LENGTH} characters."
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return "Password is too long."
+    if password == LEGACY_DEFAULT_PASSWORD:
+        return "That password is public. Choose another."
+    return None
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
-        username = request.form["username"].strip()
-        email    = request.form["email"].strip().lower()
-        password = request.form["password"]
+        username = request.form.get("username", "").strip()
+        email    = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        if not USERNAME_RE.fullmatch(username):
+            flash("Username must be 3–32 characters: letters, digits, dot, dash or underscore.", "error")
+            return render_template("register.html")
+        if len(email) > 120 or not EMAIL_RE.fullmatch(email):
+            flash("Enter a valid email address.", "error")
+            return render_template("register.html")
+        problem = password_problem(password)
+        if problem:
+            flash(problem, "error")
+            return render_template("register.html")
         if User.query.filter_by(username=username).first():
             flash("Username already taken.", "error")
             return render_template("register.html")
@@ -255,24 +431,68 @@ def register():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        username = request.form["username"].strip()
-        password = request.form["password"]
+        username = request.form.get("username", "").strip()[:80]
+        password = request.form.get("password", "")[:MAX_PASSWORD_LENGTH]
+        if login_blocked(username):
+            flash("Too many failed attempts. Try again in 15 minutes.", "error")
+            return render_template("login.html"), 429
         user = User.query.filter_by(username=username).first()
-        if not user or not check_password_hash(user.password, password):
+        valid = check_password_hash(user.password if user else _DUMMY_HASH, password)
+        if not user or not valid:
+            record_login_failure(username)
             flash("Invalid credentials.", "error")
             return render_template("login.html")
+        clear_login_failures(username)
         if not user.approved:
             flash("Your account is pending approval.", "info")
             return render_template("login.html")
-        session["user_id"] = user.id
+        session.clear()   # fresh session, fresh CSRF token
+        session.permanent    = True
+        session["user_id"]   = user.id
+        session["pw_marker"] = password_marker(user)
+        if password == LEGACY_DEFAULT_PASSWORD:
+            session["must_change_password"] = True
+            flash("This account still uses the default password. Set a new one now.", "warning")
+            return redirect(url_for("change_password"))
         return redirect(url_for("generate_keys") if not user.has_keys else url_for("dashboard"))
     return render_template("login.html")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
     return redirect(url_for("index"))
+
+
+@app.route("/account/password", methods=["GET", "POST"])
+@login_required
+def change_password():
+    user = current_user()
+    if request.method == "POST":
+        current = request.form.get("current_password", "")[:MAX_PASSWORD_LENGTH]
+        new     = request.form.get("new_password", "")
+        confirm = request.form.get("confirm_password", "")
+        if not check_password_hash(user.password, current):
+            flash("Current password is incorrect.", "error")
+            return render_template("change_password.html")
+        problem = password_problem(new)
+        if problem:
+            flash(problem, "error")
+            return render_template("change_password.html")
+        if new != confirm:
+            flash("New passwords do not match.", "error")
+            return render_template("change_password.html")
+        if new == current:
+            flash("New password must be different from the current one.", "error")
+            return render_template("change_password.html")
+        user.password = generate_password_hash(new)
+        db.session.commit()
+        # Other sessions now fail the marker check; keep this one alive.
+        session.pop("must_change_password", None)
+        session["pw_marker"] = password_marker(user)
+        flash("Password changed. Other sessions have been logged out.", "success")
+        return redirect(url_for("generate_keys") if not user.has_keys else url_for("dashboard"))
+    return render_template("change_password.html")
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +511,10 @@ def generate_keys():
         if len(passphrase) < 12:
             flash("Passphrase must be at least 12 characters.", "error")
             return render_template("generate_keys.html")
+        if len(passphrase) > MAX_PASSWORD_LENGTH:
+            flash("Passphrase is too long.", "error")
+            return render_template("generate_keys.html")
+        purge_stale_key_temps()
 
         input_data = gpg.gen_key_input(
             key_type="EDDSA", key_curve="Ed25519", key_usage="sign",
@@ -311,6 +535,15 @@ def generate_keys():
             fingerprint, secret=True, passphrase=passphrase,
             expect_passphrase=True,
         )
+
+        # The server only needs the exported copies; don't keep the secret key
+        # in its keyring, where a server compromise would expose it.
+        deleted = gpg.delete_keys(fingerprint, secret=True, passphrase=passphrase,
+                                  expect_passphrase=True)
+        if str(deleted) != "ok":
+            app.logger.error("Could not delete secret key %s from server keyring: %s",
+                             fingerprint, deleted.stderr)
+        gpg.delete_keys(fingerprint)
 
         if not pub_key or not priv_key:
             app.logger.error("Key export failed. pub=%r priv=%r", bool(pub_key), bool(priv_key))
@@ -351,7 +584,14 @@ def show_keys():
         mnem_qr=data["mnem_qr"], fingerprint=data["fingerprint"])
 
 
-@app.route("/download-keys")
+@app.route("/discard-keys", methods=["POST"])
+@login_required
+def discard_keys():
+    delete_key_temp(current_user().id)
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/download-keys", methods=["POST"])
 @login_required
 def download_keys():
     user = current_user()
@@ -483,13 +723,26 @@ def add_debt():
     user  = current_user()
     peers = User.query.filter_by(approved=True, has_keys=True).all()
     if request.method == "POST":
-        debtor_id   = int(request.form["debtor_id"])
-        creditor_id = int(request.form["creditor_id"])
-        description = request.form["description"].strip()
-        amount      = float(request.form["amount"])
+        peer_ids    = {p.id for p in peers}
+        debtor_id   = request.form.get("debtor_id",   type=int)
+        creditor_id = request.form.get("creditor_id", type=int)
+        description = request.form.get("description", "").strip()[:300]
+        amount      = parse_amount(request.form.get("amount"))
         currency    = request.form.get("currency", "USD").strip().upper()[:10]
+        if debtor_id not in peer_ids or creditor_id not in peer_ids:
+            flash("Pick a debtor and creditor from the member list.", "error")
+            return render_template("add_debt.html", peers=peers, me=user)
         if debtor_id == creditor_id:
             flash("Debtor and creditor cannot be the same person.", "error")
+            return render_template("add_debt.html", peers=peers, me=user)
+        if not description:
+            flash("Description is required.", "error")
+            return render_template("add_debt.html", peers=peers, me=user)
+        if amount is None:
+            flash("Amount must be a positive number.", "error")
+            return render_template("add_debt.html", peers=peers, me=user)
+        if not currency.isalnum():
+            flash("Currency must be letters or digits, e.g. USD.", "error")
             return render_template("add_debt.html", peers=peers, me=user)
         db.session.add(Debt(debtor_id=debtor_id, creditor_id=creditor_id,
                             description=description, amount=amount, currency=currency))
@@ -507,8 +760,11 @@ def reduce_debt(debt_id):
     if user.id not in (debt.debtor_id, debt.creditor_id) and not user.is_admin:
         flash("Not authorised.", "error")
         return redirect(url_for("key_directory"))
-    amount = float(request.form.get("amount", 0))
-    debt.amount = max(0.0, debt.amount - amount)
+    amount = parse_amount(request.form.get("amount"))
+    if amount is None:
+        flash("Amount must be a positive number.", "error")
+        return redirect(url_for("key_directory"))
+    debt.amount = max(0.0, round(debt.amount - amount, 2))
     if debt.amount == 0:
         debt.active     = False
         debt.efforts_ok = True   # settled — clear any no-efforts flag
@@ -605,7 +861,7 @@ def admin_panel():
                            all_users=all_users, flag_count=flag_count)
 
 
-@app.route("/admin/approve/<int:user_id>")
+@app.route("/admin/approve/<int:user_id>", methods=["POST"])
 @admin_required
 def approve_user(user_id):
     user = db.get_or_404(User, user_id)
@@ -615,19 +871,26 @@ def approve_user(user_id):
     return redirect(url_for("admin_panel"))
 
 
-@app.route("/admin/reject/<int:user_id>")
+@app.route("/admin/reject/<int:user_id>", methods=["POST"])
 @admin_required
 def reject_user(user_id):
-    db.session.delete(db.get_or_404(User, user_id))
+    user = db.get_or_404(User, user_id)
+    if user.approved:
+        flash("Only pending registrations can be rejected.", "error")
+        return redirect(url_for("admin_panel"))
+    db.session.delete(user)
     db.session.commit()
     flash("User rejected and removed.", "info")
     return redirect(url_for("admin_panel"))
 
 
-@app.route("/admin/toggle-admin/<int:user_id>")
+@app.route("/admin/toggle-admin/<int:user_id>", methods=["POST"])
 @admin_required
 def toggle_admin(user_id):
     user = db.get_or_404(User, user_id)
+    if user.id == current_user().id:
+        flash("You cannot change your own admin status.", "error")
+        return redirect(url_for("admin_panel"))
     user.is_admin = not user.is_admin
     db.session.commit()
     flash(f"Admin status toggled for {user.username}.", "info")
@@ -648,7 +911,7 @@ def admin_flags():
                            inactive_users=inactive_users, revoked_users=revoked_users)
 
 
-@app.route("/admin/flags/<int:flag_id>/uphold")
+@app.route("/admin/flags/<int:flag_id>/uphold", methods=["POST"])
 @admin_required
 def uphold_flag(flag_id):
     flag = db.get_or_404(CompromiseFlag, flag_id)
@@ -660,7 +923,7 @@ def uphold_flag(flag_id):
     return redirect(url_for("admin_flags"))
 
 
-@app.route("/admin/flags/<int:flag_id>/dismiss")
+@app.route("/admin/flags/<int:flag_id>/dismiss", methods=["POST"])
 @admin_required
 def dismiss_flag(flag_id):
     flag = db.get_or_404(CompromiseFlag, flag_id)
@@ -689,6 +952,11 @@ def revoke_key(user_id):
 @admin_required
 def reinstate_key(user_id):
     target = db.get_or_404(User, user_id)
+    if target.key_status != "revoked":
+        flash(f"{target.username}'s key is not revoked.", "info")
+        return redirect(url_for("admin_flags"))
+    # Start from active; recheck_debt_status moves it to inactive if debts say so.
+    target.key_status  = "active"
     target.revoked_at  = None
     target.revoke_note = None
     db.session.commit()
@@ -704,17 +972,24 @@ def reinstate_key(user_id):
 def create_tables():
     with app.app_context():
         db.create_all()
+        purge_stale_key_temps()
         if not User.query.filter_by(is_admin=True).first():
+            password = os.environ.get("ADMIN_PASSWORD") or secrets.token_urlsafe(18)
             db.session.add(User(
                 username="admin", email="admin@localhost",
-                password=generate_password_hash("changeme123!"),
+                password=generate_password_hash(password),
                 approved=True, is_admin=True, has_keys=False,
             ))
             db.session.commit()
-            print("Default admin created: admin / changeme123!")
-            print("CHANGE THIS PASSWORD IMMEDIATELY.")
+            if "ADMIN_PASSWORD" in os.environ:
+                print("Admin account created: admin (password from ADMIN_PASSWORD)")
+            else:
+                # Shown once; it is not stored anywhere in readable form.
+                print(f"Admin account created: admin / {password}")
+                print("Save this password now. It will not be shown again.")
 
 
 if __name__ == "__main__":
     create_tables()
-    app.run(debug=True, host="127.0.0.1", port=5000)
+    # The Werkzeug debugger can run arbitrary code, so it is opt-in.
+    app.run(debug=os.environ.get("FLASK_DEBUG") == "1", host="127.0.0.1", port=5000)

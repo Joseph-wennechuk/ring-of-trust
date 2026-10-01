@@ -4,14 +4,15 @@
 <div class="form-page">
   <h2 class="form-page__title">Register</h2>
   <form method="POST" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label class="form__label">Username
-      <input class="form__input" type="text" name="username" required autofocus>
+      <input class="form__input" type="text" name="username" required autofocus minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]+">
     </label>
     <label class="form__label">Email
       <input class="form__input" type="email" name="email" required>
     </label>
     <label class="form__label">Password
-      <input class="form__input" type="password" name="password" required minlength="8">
+      <input class="form__input" type="password" name="password" required minlength="12" maxlength="1024">
     </label>
     <button class="btn btn--primary" type="submit">Request Access</button>
   </form>

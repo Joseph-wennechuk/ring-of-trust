@@ -84,6 +84,7 @@
         <!-- Reduce (debtor, creditor, or admin) -->
         {% if entry.is_own or d.creditor_id == me.id or me.is_admin %}
         <form method="POST" action="{{ url_for('reduce_debt', debt_id=d.id) }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="number" name="amount" min="0.01" max="{{ d.amount }}" step="0.01"
                  placeholder="reduce by…" class="form__input form__input--sm">
           <button class="btn btn--xs">Reduce</button>
@@ -94,6 +95,7 @@
         <details class="efforts-form">
           <summary class="btn btn--xs btn--ghost">Set Efforts</summary>
           <form method="POST" action="{{ url_for('set_efforts', debt_id=d.id) }}" class="efforts-form__body">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <label class="form__label">Status
               <select name="efforts_ok" class="form__input">
                 <option value="1" {% if d.efforts_ok %}selected{% endif %}>Making efforts ✓</option>
@@ -114,6 +116,7 @@
         <details class="efforts-form">
           <summary class="btn btn--xs btn--warn">Dispute</summary>
           <form method="POST" action="{{ url_for('dispute_debt', debt_id=d.id) }}" class="efforts-form__body">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <label class="form__label">Your statement
               <textarea name="dispute_note" class="form__input form__input--ta" rows="2"
                         placeholder="Explain why this marking is incorrect…" maxlength="1000"></textarea>
@@ -156,6 +159,7 @@
       {% if u.key_status != 'revoked' %}
         {% if entry.can_sign %}
         <form method="POST" action="{{ url_for('sign_key', target_id=u.id) }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="text" name="note" placeholder="Optional note (e.g. 'met in person 2024')"
                  maxlength="300" class="form__input form__input--sm">
           <button class="btn btn--sm btn--primary">Sign Key</button>
@@ -166,6 +170,7 @@
       {% endif %}
 
       <form method="POST" action="{{ url_for('annotate', target_id=u.id) }}" class="inline-form inline-form--col">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <textarea name="body" placeholder="Add a public annotation…" maxlength="1000"
                   class="form__input form__input--ta" rows="2"></textarea>
         <button class="btn btn--sm btn--ghost">Add Annotation</button>
@@ -175,6 +180,7 @@
       <details class="flag-form">
         <summary class="btn btn--sm btn--flag">🚩 Security Flag</summary>
         <form method="POST" action="{{ url_for('flag_key', target_id=u.id) }}" class="flag-form__body">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <p class="flag-form__intro">
             Submit if you have operational security concerns about this member's key or communications.
             This is informational only — it does not affect their key status.
