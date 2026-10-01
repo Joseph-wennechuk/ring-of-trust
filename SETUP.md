@@ -131,9 +131,15 @@ to the rest of the network.
                    Never in production: it can run arbitrary code.
   HOST             Address `python app.py` listens on (default 127.0.0.1, this
                    computer only). HOST=0.0.0.0 lets other devices on your network
-                   connect, over plain HTTP: only on a network you trust. Refused
-                   while FLASK_DEBUG=1.
+                   connect, over plain HTTP unless HTTPS=1: only on a network you
+                   trust. Refused while FLASK_DEBUG=1.
   PORT             Port for `python app.py` (default 5000)
+  HTTPS            Set to 1 to serve `python app.py` over HTTPS with a self-signed
+                   certificate (kept in instance/tls/). Needed for in-browser key
+                   generation from other devices: browsers only allow it over HTTPS
+                   or on this computer at http://127.0.0.1. Browsers warn once;
+                   check the SHA-256 fingerprint printed at startup before accepting.
+                   e.g.  HTTPS=1 HOST=0.0.0.0 python app.py
   FLAG_THRESHOLD   How many opsec flags trigger the visual warning (default: 3)
 
 Set in PowerShell before running:

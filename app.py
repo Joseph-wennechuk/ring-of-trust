@@ -313,7 +313,9 @@ def set_security_headers(response):
     if request.endpoint != "static":
         # Pages show private data, so keep them out of browser and proxy caches.
         response.headers["Cache-Control"] = "no-store"
-    if app.config["SESSION_COOKIE_SECURE"]:
+    if not RUNNING_DEV_SERVER:
+        # Not on the dev server: browsers would then insist on HTTPS for
+        # localhost for a year, breaking any other local project on plain HTTP.
         response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
 
@@ -1056,6 +1058,81 @@ def create_tables():
 
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+DEV_TLS_DIR    = os.path.join(os.path.dirname(__file__), "instance", "tls")
+
+
+def lan_address():
+    """This machine's address on the local network, or None. Sends nothing:
+    connecting a UDP socket only picks the outgoing interface."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))     # TEST-NET-1, never routed
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
+def dev_tls_files(host):
+    """Self-signed certificate for `python app.py` over HTTPS, kept in
+    instance/tls/ and recreated when it expires or this machine's addresses
+    change. Returns (cert_path, key_path, sha256_fingerprint)."""
+    import ipaddress
+    import socket
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    names = {"localhost", socket.gethostname()}
+    ips   = {"127.0.0.1", "::1"}
+    for candidate in (lan_address(), host):
+        try:
+            if candidate and not ipaddress.ip_address(candidate).is_unspecified:
+                ips.add(candidate)
+        except ValueError:
+            if candidate:
+                names.add(candidate)    # a hostname, not an IP
+    wanted = ([x509.DNSName(n) for n in sorted(names)] +
+              [x509.IPAddress(ipaddress.ip_address(i)) for i in sorted(ips)])
+
+    os.makedirs(DEV_TLS_DIR, mode=0o700, exist_ok=True)
+    cert_path = os.path.join(DEV_TLS_DIR, "cert.pem")
+    key_path  = os.path.join(DEV_TLS_DIR, "key.pem")
+
+    cert = None
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        with open(cert_path, "rb") as f:
+            cert = x509.load_pem_x509_certificate(f.read())
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        still_valid = cert.not_valid_after_utc > datetime.now().astimezone() + timedelta(days=7)
+        if not still_valid or not set(wanted) <= set(san):
+            cert = None
+
+    if cert is None:
+        key  = ec.generate_private_key(ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Ghetto-PASS dev server")])
+        now  = datetime.now().astimezone()
+        cert = (x509.CertificateBuilder()
+                .subject_name(name).issuer_name(name)
+                .public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now - timedelta(minutes=5))
+                .not_valid_after(now + timedelta(days=365))
+                .add_extension(x509.SubjectAlternativeName(wanted), critical=False)
+                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                .sign(key, hashes.SHA256()))
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(key.private_bytes(serialization.Encoding.PEM,
+                                      serialization.PrivateFormat.PKCS8,
+                                      serialization.NoEncryption()))
+        with open(cert_path, "wb") as f:
+            f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+    fingerprint = cert.fingerprint(hashes.SHA256()).hex(":").upper()
+    return cert_path, key_path, fingerprint
+
 
 if __name__ == "__main__":
     # The Werkzeug debugger can run arbitrary code, so it is opt-in, and never
@@ -1066,8 +1143,21 @@ if __name__ == "__main__":
     if debug and host not in LOOPBACK_HOSTS:
         raise SystemExit(f"Refusing to start: the debugger can't be reachable from the "
                          f"network (HOST={host}). Unset FLASK_DEBUG or use HOST=127.0.0.1.")
+    https = os.environ.get("HTTPS") == "1"
     create_tables()
-    if host not in LOOPBACK_HOSTS:
+    ssl_context = None
+    if https:
+        cert_path, key_path, fingerprint = dev_tls_files(host)
+        ssl_context = (cert_path, key_path)
+        app.config["SESSION_COOKIE_SECURE"] = True
+        lan = lan_address()
+        print("HTTPS with a self-signed certificate. Browsers will warn once; before "
+              "accepting, check the certificate's SHA-256 fingerprint matches:")
+        print(f"  {fingerprint}")
+        if host not in LOOPBACK_HOSTS and lan:
+            print(f"Open https://{lan}:{port} on other devices on this network.")
+    elif host not in LOOPBACK_HOSTS:
         print(f"WARNING: listening on {host}:{port} over plain HTTP. Anyone on this network can "
-              f"reach the site, and passwords travel unencrypted. Use only on a network you trust.")
-    app.run(debug=debug, host=host, port=port)
+              f"reach the site, and passwords travel unencrypted. Use only on a network you "
+              f"trust, or add HTTPS=1.")
+    app.run(debug=debug, host=host, port=port, ssl_context=ssl_context)
