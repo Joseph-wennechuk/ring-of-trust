@@ -1,23 +1,78 @@
 {% extends "base.html" %}
-{% block title %}Generate Keys – Ghetto-PASS{% endblock %}
+{% block title %}Set Up Your Key – Ghetto-PASS{% endblock %}
 {% block content %}
 <div class="form-page form-page--wide">
-  <h2 class="form-page__title">Generate Your PGP Keypair</h2>
+  <h2 class="form-page__title">Set Up Your PGP Key</h2>
   <div class="info-box">
-    <p>You will receive an <strong>Ed25519 / Curve25519</strong> keypair — modern elliptic-curve cryptography.</p>
-    <p>Your <strong>private key</strong> and a <strong>24-word recovery mnemonic</strong> will be available for download immediately after generation. The server deletes its copy as soon as you download them, or after 30 minutes.</p>
-    <p>Choose a strong passphrase of at least 12 characters. You will need it every time you use your private key.</p>
+    <p>Your keypair is created <strong>on your own device</strong>. Only your <strong>public key</strong> is sent to this server. Your private key and passphrase never leave your device, so the server cannot lose or leak them.</p>
   </div>
-  <form method="POST" class="form" id="keygen-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label class="form__label">Key Passphrase (min 12 chars)
-      <input class="form__input" type="password" name="passphrase" required minlength="12"
-             placeholder="Something long and memorable">
-    </label>
-    <label class="form__label">Confirm Passphrase
-      <input class="form__input" type="password" id="confirm" required minlength="12">
-    </label>
-    <button class="btn btn--primary" type="submit" id="gen-btn">Generate Keypair</button>
-  </form>
+
+  <!-- Option 1: generate in this browser -->
+  <section id="keygen" data-name="{{ current_user.username }}" data-email="{{ current_user.email }}"
+           data-challenge="{{ challenge }}">
+    <h3 class="section-title">Generate a new key in this browser</h3>
+    <p class="form-page__foot">An <strong>Ed25519 / Curve25519</strong> keypair, valid for 2 years.</p>
+
+    <div class="form" id="keygen-step1">
+      <label class="form__label">Key Passphrase (min 12 chars)
+        <input class="form__input" type="password" id="kg-passphrase" minlength="12" maxlength="1024"
+               autocomplete="new-password" placeholder="Something long and memorable">
+      </label>
+      <label class="form__label">Confirm Passphrase
+        <input class="form__input" type="password" id="kg-confirm" minlength="12" maxlength="1024"
+               autocomplete="new-password">
+      </label>
+      <p class="form-page__foot">You will need this passphrase every time you use your private key. It cannot be recovered.</p>
+      <button class="btn btn--primary" type="button" id="kg-generate">Generate Keypair</button>
+      <p class="form-page__foot" id="kg-status" role="status"></p>
+    </div>
+
+    <div id="keygen-step2" hidden>
+      <div class="info-box info-box--warn">
+        <strong>Save both files now, somewhere safe and offline.</strong> They exist only in this browser tab. Once you leave this page they are gone, and nobody, including the admins, can recover them.
+      </div>
+      <p>Fingerprint: <code id="kg-fingerprint" class="qr-card__fp"></code></p>
+      <div class="keys-page__actions">
+        <button class="btn btn--primary" type="button" id="kg-save-private">⬇ Private key</button>
+        <button class="btn btn--ghost" type="button" id="kg-save-revocation">⬇ Revocation certificate</button>
+      </div>
+      <p class="form-page__foot">The <strong>revocation certificate</strong> lets you cancel this key if you lose it or it's seized. Keep it apart from the private key; anyone holding it can revoke your key.</p>
+      <form method="POST" class="form" id="kg-register-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="public_key" id="kg-public-key">
+        <input type="hidden" name="signed_proof" id="kg-signed-proof">
+        <label class="form__label form__label--inline">
+          <input type="checkbox" id="kg-saved"> I have saved both files somewhere safe
+        </label>
+        <button class="btn btn--primary" type="submit" id="kg-register" disabled>Register This Key</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Option 2: bring your own key -->
+  <details class="efforts-form" style="margin-top:2rem">
+    <summary class="btn btn--ghost">I already have a PGP key</summary>
+    <form method="POST" class="form efforts-form__body">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <p>1. Export your public key, e.g. <code>gpg --armor --export YOUR_KEY_ID</code>, and paste it here:</p>
+      <label class="form__label">Public key
+        <textarea class="form__input form__input--ta" name="public_key" rows="6" required
+                  placeholder="-----BEGIN PGP PUBLIC KEY BLOCK-----"></textarea>
+      </label>
+      <p>2. Prove you hold the private key by clear-signing this exact text:</p>
+      <pre class="challenge"><code>{{ challenge }}</code></pre>
+      <p>For example: <code>echo {{ challenge }} | gpg --clearsign --local-user YOUR_KEY_ID</code></p>
+      <label class="form__label">Signed text
+        <textarea class="form__input form__input--ta" name="signed_proof" rows="8" required
+                  placeholder="-----BEGIN PGP SIGNED MESSAGE-----"></textarea>
+      </label>
+      <p class="form-page__foot">Never paste your private key. Only the public key and the signed text above.</p>
+      <button class="btn btn--primary" type="submit">Register This Key</button>
+    </form>
+  </details>
 </div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/openpgp/openpgp.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/keygen.js') }}"></script>
 {% endblock %}

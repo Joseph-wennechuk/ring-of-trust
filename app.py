@@ -2,23 +2,21 @@ import os
 import io
 import re
 import hmac
-import json
 import math
 import time
 import base64
 import secrets
-import zipfile
+import tempfile
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import (Flask, render_template, request, redirect, url_for,
-                   session, flash, send_file, abort, g)
+                   session, flash, abort, g)
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import gnupg
 import qrcode
-from mnemonic import Mnemonic
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -59,47 +57,71 @@ EMAIL_RE    = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 db = SQLAlchemy(app)
 
-GPG_HOME  = os.path.join(os.path.dirname(__file__), "instance", "gnupg")
-KEYS_TEMP = os.path.join(os.path.dirname(__file__), "instance", "keytemp")
-os.makedirs(GPG_HOME,  mode=0o700, exist_ok=True)
-os.makedirs(KEYS_TEMP, mode=0o700, exist_ok=True)
-gpg = gnupg.GPG(gnupghome=GPG_HOME, options=["--pinentry-mode", "loopback"])
-gpg.encoding = "utf-8"
+# Members create their keys themselves (in the browser, or with their own
+# GnuPG). The server only ever sees public keys, checked with a throwaway
+# keyring per submission, so it holds no keyring of its own.
 
-# Freshly generated key bundles wait here until downloaded, at most this long.
-KEYS_TEMP_TTL = 30 * 60
+class KeyCheckError(Exception):
+    pass
 
 
-def save_key_temp(user_id, data):
-    path = os.path.join(KEYS_TEMP, f"{user_id}.json")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(data, f)
+def key_challenge_text(username, nonce):
+    # Plain characters only, so it survives `echo ... | gpg --clearsign` on any shell.
+    return f"Ghetto-PASS key ownership proof for {username}: {nonce}"
 
 
-def load_key_temp(user_id):
-    path = os.path.join(KEYS_TEMP, f"{user_id}.json")
-    if not os.path.exists(path):
-        return None
-    if time.time() - os.path.getmtime(path) > KEYS_TEMP_TTL:
-        os.remove(path)
-        return None
-    with open(path) as f:
-        return json.load(f)
+def check_submitted_key(armored_public_key, signed_proof, challenge):
+    """Validate a member's public key and their signature over `challenge`.
 
+    Returns (fingerprint, armored public key stripped of third-party
+    signatures). Raises KeyCheckError with a message fit to show the member.
+    """
+    if "PRIVATE KEY BLOCK" in armored_public_key:
+        raise KeyCheckError("That is a PRIVATE key. Never paste it anywhere; "
+                            "paste the PUBLIC key block instead.")
+    if "BEGIN PGP PUBLIC KEY BLOCK" not in armored_public_key:
+        raise KeyCheckError("Paste an ASCII-armored public key "
+                            "(it starts with -----BEGIN PGP PUBLIC KEY BLOCK-----).")
+    if "BEGIN PGP SIGNED MESSAGE" not in signed_proof:
+        raise KeyCheckError("The proof must be a clear-signed message "
+                            "(it starts with -----BEGIN PGP SIGNED MESSAGE-----).")
 
-def purge_stale_key_temps():
-    now = time.time()
-    for name in os.listdir(KEYS_TEMP):
-        path = os.path.join(KEYS_TEMP, name)
-        if os.path.isfile(path) and now - os.path.getmtime(path) > KEYS_TEMP_TTL:
-            os.remove(path)
+    with tempfile.TemporaryDirectory() as home:
+        keyring = gnupg.GPG(gnupghome=home)
+        # Signature notations can hold raw binary (OpenPGP.js adds a random
+        # salt to every signature), which GnuPG echoes on its status output.
+        # Latin-1 decodes any byte; everything checked here is ASCII.
+        keyring.encoding = "latin-1"
+        imported = keyring.import_keys(armored_public_key)
+        fingerprints = set(imported.fingerprints)
+        if len(fingerprints) != 1:
+            raise KeyCheckError("Paste exactly one public key.")
+        fingerprint = fingerprints.pop()
+        if keyring.list_keys(secret=True):
+            raise KeyCheckError("Paste only the public key.")
 
+        info = keyring.list_keys(keys=[fingerprint])[0]
+        if info["trust"] == "r":
+            raise KeyCheckError("This key has been revoked.")
+        if info["trust"] == "e" or (info["expires"] and int(info["expires"]) <= time.time()):
+            raise KeyCheckError("This key has expired.")
+        algo, length = info["algo"], int(info["length"] or 0)
+        if algo == "1" and length < 3072:   # RSA
+            raise KeyCheckError("RSA keys must be at least 3072 bits.")
+        if algo not in ("1", "19", "22"):   # RSA, ECDSA, EdDSA
+            raise KeyCheckError("Unsupported key type. Use Ed25519 or RSA 3072+.")
 
-def delete_key_temp(user_id):
-    path = os.path.join(KEYS_TEMP, f"{user_id}.json")
-    if os.path.exists(path):
-        os.remove(path)
+        verified = keyring.decrypt(signed_proof)
+        if not verified.valid or verified.pubkey_fingerprint != fingerprint:
+            raise KeyCheckError("The proof was not signed by this key.")
+        if verified.data.decode("utf-8", "replace").strip() != challenge:
+            raise KeyCheckError("The signed text doesn't match the challenge shown on this page.")
+
+        cleaned = keyring.export_keys(fingerprint, minimal=True)
+        if not cleaned:
+            raise KeyCheckError("Could not read this key.")
+        return fingerprint, cleaned
+
 
 # ---------------------------------------------------------------------------
 # Models
@@ -360,10 +382,6 @@ def make_qr_b64(data: str) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def generate_mnemonic() -> str:
-    return Mnemonic("english").generate(strength=256)
-
-
 def recheck_debt_status(debtor: User):
     """
     Key goes inactive if ANY confirmed, active debt on this user has efforts_ok=False.
@@ -513,124 +531,38 @@ def change_password():
 @app.route("/generate-keys", methods=["GET", "POST"])
 @login_required
 def generate_keys():
+    """Register the member's public key. The private key is created on their
+    own device; they prove they hold it by signing a one-time challenge."""
     user = current_user()
     if user.has_keys:
         return redirect(url_for("dashboard"))
 
+    if "key_nonce" not in session:
+        session["key_nonce"] = secrets.token_urlsafe(18)
+    challenge = key_challenge_text(user.username, session["key_nonce"])
+
     if request.method == "POST":
-        passphrase = request.form.get("passphrase", "").strip()
-        if len(passphrase) < 12:
-            flash("Passphrase must be at least 12 characters.", "error")
-            return render_template("generate_keys.html")
-        if len(passphrase) > MAX_PASSWORD_LENGTH:
-            flash("Passphrase is too long.", "error")
-            return render_template("generate_keys.html")
-        purge_stale_key_temps()
-
-        input_data = gpg.gen_key_input(
-            key_type="EDDSA", key_curve="Ed25519", key_usage="sign",
-            subkey_type="ECDH", subkey_curve="Curve25519", subkey_usage="encrypt",
-            name_real=user.username, name_email=user.email,
-            passphrase=passphrase, expire_date="2y",
-        )
-        key         = gpg.gen_key(input_data)
-        fingerprint = str(key.fingerprint)
-
-        if not fingerprint:
-            app.logger.error("Key generation failed: %s", key.stderr)
-            flash("Key generation failed — check server logs.", "error")
-            return render_template("generate_keys.html")
-
-        pub_key  = gpg.export_keys(fingerprint)
-        priv_key = gpg.export_keys(
-            fingerprint, secret=True, passphrase=passphrase,
-            expect_passphrase=True,
-        )
-
-        # The server only needs the exported copies; don't keep the secret key
-        # in its keyring, where a server compromise would expose it.
-        deleted = gpg.delete_keys(fingerprint, secret=True, passphrase=passphrase,
-                                  expect_passphrase=True)
-        if str(deleted) != "ok":
-            app.logger.error("Could not delete secret key %s from server keyring: %s",
-                             fingerprint, deleted.stderr)
-        gpg.delete_keys(fingerprint)
-
-        if not pub_key or not priv_key:
-            app.logger.error("Key export failed. pub=%r priv=%r", bool(pub_key), bool(priv_key))
-            flash("Key export failed — check server logs.", "error")
-            return render_template("generate_keys.html")
-
-        mnemonic = generate_mnemonic()
+        public_key   = request.form.get("public_key", "").strip()
+        signed_proof = request.form.get("signed_proof", "").strip()
+        try:
+            fingerprint, public_key = check_submitted_key(public_key, signed_proof, challenge)
+        except KeyCheckError as e:
+            flash(str(e), "error")
+            return render_template("generate_keys.html", challenge=challenge)
+        if User.query.filter(User.fingerprint == fingerprint, User.id != user.id).first():
+            flash("That key is already registered to another member.", "error")
+            return render_template("generate_keys.html", challenge=challenge)
 
         user.fingerprint = fingerprint
-        user.public_key  = pub_key
+        user.public_key  = public_key
         user.has_keys    = True
         user.key_status  = "active"
         db.session.commit()
-
-        # Store on disk — too large for a session cookie
-        save_key_temp(user.id, {
-            "priv_key":    priv_key,
-            "mnemonic":    mnemonic,
-            "pub_qr":      make_qr_b64(pub_key),
-            "priv_qr":     make_qr_b64(priv_key),
-            "mnem_qr":     make_qr_b64(mnemonic),
-            "fingerprint": fingerprint,
-        })
-        return redirect(url_for("show_keys"))
-
-    return render_template("generate_keys.html")
-
-
-@app.route("/show-keys")
-@login_required
-def show_keys():
-    user = current_user()
-    data = load_key_temp(user.id)
-    if not data:
+        session.pop("key_nonce", None)   # single use
+        flash("Your public key is registered.", "success")
         return redirect(url_for("dashboard"))
-    return render_template("show_keys.html",
-        pub_qr=data["pub_qr"], priv_qr=data["priv_qr"],
-        mnem_qr=data["mnem_qr"], fingerprint=data["fingerprint"])
 
-
-@app.route("/discard-keys", methods=["POST"])
-@login_required
-def discard_keys():
-    delete_key_temp(current_user().id)
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/download-keys", methods=["POST"])
-@login_required
-def download_keys():
-    user = current_user()
-    data = load_key_temp(user.id)
-    if not data:
-        flash("Nothing to download — keys may already have been downloaded.", "error")
-        return redirect(url_for("dashboard"))
-    priv_key = data["priv_key"]
-    mnemonic = data["mnemonic"]
-    delete_key_temp(user.id)
-    user = current_user()
-    buf  = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(f"{user.username}_private_key.asc",       priv_key)
-        zf.writestr(f"{user.username}_public_key.asc",        user.public_key)
-        zf.writestr(f"{user.username}_recovery_mnemonic.txt", mnemonic)
-        zf.writestr("README.txt",
-            "KEEP THESE FILES SECURE AND OFFLINE.\n\n"
-            f"Private key  : {user.username}_private_key.asc\n"
-            f"Public key   : {user.username}_public_key.asc\n"
-            f"Recovery seed: {user.username}_recovery_mnemonic.txt\n\n"
-            "The recovery mnemonic allows a sysop to help reconstruct\n"
-            "your key material if the private key is lost.\n"
-            "Do NOT share your private key or mnemonic with anyone.\n")
-    buf.seek(0)
-    return send_file(buf, as_attachment=True,
-                     download_name=f"{user.username}_ghetto-pass_keys.zip",
-                     mimetype="application/zip")
+    return render_template("generate_keys.html", challenge=challenge)
 
 
 # ---------------------------------------------------------------------------
@@ -657,6 +589,7 @@ def dashboard():
     my_pending_debts = Debt.query.filter_by(debtor_id=user.id, active=True,
                                             confirmed=False).count()
     return render_template("dashboard.html",
+        fingerprint_qr=make_qr_b64(user.fingerprint) if user.fingerprint else None,
         pending_count=pending_count,
         flag_review_count=flag_review_count,
         dispute_count=dispute_count,
@@ -1098,7 +1031,6 @@ def create_tables():
     with app.app_context():
         db.create_all()
         add_missing_columns()
-        purge_stale_key_temps()
         if not User.query.filter_by(is_admin=True).first():
             password = os.environ.get("ADMIN_PASSWORD") or secrets.token_urlsafe(18)
             db.session.add(User(
