@@ -378,7 +378,7 @@ def download_keys():
             "Do NOT share your private key or mnemonic with anyone.\n")
     buf.seek(0)
     return send_file(buf, as_attachment=True,
-                     download_name=f"{user.username}_rot_keys.zip",
+                     download_name=f"{user.username}_ghetto-pass_keys.zip",
                      mimetype="application/zip")
 
 

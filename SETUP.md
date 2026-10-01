@@ -1,4 +1,4 @@
-# Ring of Trust — Windows Setup Guide
+# Ghetto-PASS — Windows Setup Guide
 
 ## Step 1: Install Prerequisites
 
