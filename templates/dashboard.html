@@ -54,10 +54,25 @@
 
   <div class="info-box" style="margin-top:2rem">
     <p><strong>Fingerprint:</strong> <code>{{ current_user.fingerprint }}</code></p>
-    {% if fingerprint_qr %}
-    <p><img class="qr-card__img" src="data:image/png;base64,{{ fingerprint_qr }}" alt="Fingerprint QR code"
-            width="160" height="160"><br>
-       <small>Let other members scan this to check your fingerprint in person before signing your key.</small></p>
+    {% if current_user.fingerprint %}
+    <div class="qr-grid">
+      {% if fingerprint_qr %}
+      <div class="qr-card">
+        <h3 class="qr-card__title">Fingerprint</h3>
+        <img class="qr-card__img" src="data:image/png;base64,{{ fingerprint_qr }}" alt="Fingerprint QR code">
+        <p class="qr-card__note">Let other members scan this to check your fingerprint in person before signing your key.</p>
+      </div>
+      {% endif %}
+      <div class="qr-card">
+        <h3 class="qr-card__title">Public Key</h3>
+        {% if public_key_qr %}
+        <img class="qr-card__img qr-card__img--large" src="data:image/png;base64,{{ public_key_qr }}" alt="Public key QR code">
+        <p class="qr-card__note">Safe to share. Scanning this gives someone your full public key.</p>
+        {% else %}
+        <p class="qr-card__note">Your public key is too large to fit in a QR code.</p>
+        {% endif %}
+      </div>
+    </div>
     {% endif %}
     <p><strong>Key status:</strong> <span class="status-tag status-tag--{{ current_user.key_status }}">{{ current_user.key_status.upper() }}</span>
       {% if current_user.debt_disputed %}<span class="status-tag status-tag--disputed">DISPUTED</span>{% endif %}

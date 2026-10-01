@@ -160,6 +160,8 @@ select.form__input { appearance: none; }
 .qr-card__title { font-family: var(--mono); color: var(--head); font-size: 0.95rem; letter-spacing: 0.08em; }
 .qr-card__note  { font-size: 0.78rem; color: var(--dim); }
 .qr-card__img   { width: 180px; height: 180px; image-rendering: pixelated; border: 3px solid var(--bg3); }
+/* Keys are dense QR codes; they need more pixels to scan reliably. */
+.qr-card__img--large { width: 300px; height: 300px; max-width: 100%; background: #fff; }
 .qr-card__fp    { font-family: var(--mono); font-size: 0.65rem; color: var(--dim); word-break: break-all; }
 .keys-page__actions { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; }
 

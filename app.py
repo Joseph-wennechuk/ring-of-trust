@@ -375,8 +375,15 @@ def parse_amount(raw):
     return round(amount, 2)
 
 
-def make_qr_b64(data: str) -> str:
-    img = qrcode.make(data)
+def make_qr_b64(data: str):
+    """PNG QR code as base64, or None if the data is too big for a QR code
+    (e.g. a large RSA public key)."""
+    try:
+        img = qrcode.make(data, error_correction=qrcode.constants.ERROR_CORRECT_L)
+    except (qrcode.exceptions.DataOverflowError, ValueError):
+        # Too much data: qrcode raises ValueError ("Invalid version") rather
+        # than DataOverflowError when no QR version is big enough.
+        return None
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
@@ -590,6 +597,7 @@ def dashboard():
                                             confirmed=False).count()
     return render_template("dashboard.html",
         fingerprint_qr=make_qr_b64(user.fingerprint) if user.fingerprint else None,
+        public_key_qr=make_qr_b64(user.public_key) if user.public_key else None,
         pending_count=pending_count,
         flag_review_count=flag_review_count,
         dispute_count=dispute_count,

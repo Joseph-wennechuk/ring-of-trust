@@ -118,6 +118,7 @@ to the rest of the network.
   static/js/app.js         Confirmation prompts
   static/js/keygen.js      In-browser key generation
   static/vendor/openpgp/   OpenPGP.js 6.3.2 (LGPL-3.0), see SOURCE.txt
+  static/vendor/qrcode-generator/  QR codes drawn in the browser (MIT), see SOURCE.txt
 
 ---
 

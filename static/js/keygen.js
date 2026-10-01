@@ -73,6 +73,23 @@
   $("kg-save-revocation").addEventListener("click", function () {
     saveFile(root.dataset.name + "_revocation_certificate.asc", generated.revocationCertificate);
   });
+  // Drawn here in the browser: the private key never goes to the server.
+  $("kg-show-qr").addEventListener("click", function () {
+    var img = $("kg-private-qr");
+    if (img.hidden) {
+      var qr = qrcode(0, "L");   // smallest version that fits; L holds the most data
+      qr.addData(generated.privateKey);
+      qr.make();
+      img.src = qr.createDataURL(4, 4);
+      img.hidden = false;
+      this.textContent = "Hide private key QR";
+    } else {
+      img.hidden = true;
+      img.removeAttribute("src");
+      this.textContent = "Show private key QR";
+    }
+  });
+
   $("kg-saved").addEventListener("change", function () {
     $("kg-register").disabled = !this.checked;
   });

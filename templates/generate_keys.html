@@ -36,6 +36,12 @@
         <button class="btn btn--primary" type="button" id="kg-save-private">⬇ Private key</button>
         <button class="btn btn--ghost" type="button" id="kg-save-revocation">⬇ Revocation certificate</button>
       </div>
+      <div class="qr-card qr-card--sensitive">
+        <h3 class="qr-card__title">Private Key QR (paper backup)</h3>
+        <p class="qr-card__note">⚠ Anyone who photographs this, or sees it over your shoulder, gets a copy of your private key. It is still locked by your passphrase. Only show it somewhere private, e.g. to print it.</p>
+        <button class="btn btn--ghost" type="button" id="kg-show-qr">Show private key QR</button>
+        <img class="qr-card__img qr-card__img--large" id="kg-private-qr" alt="Private key QR code" hidden>
+      </div>
       <p class="form-page__foot">The <strong>revocation certificate</strong> lets you cancel this key if you lose it or it's seized. Keep it apart from the private key; anyone holding it can revoke your key.</p>
       <form method="POST" class="form" id="kg-register-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -74,5 +80,6 @@
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='vendor/openpgp/openpgp.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/qrcode-generator/qrcode.js') }}"></script>
 <script src="{{ url_for('static', filename='js/keygen.js') }}"></script>
 {% endblock %}
